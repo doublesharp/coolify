@@ -1,0 +1,30 @@
+name: DoublePaaS upstream sync
+
+on:
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: doublepaas-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'doublesharp/coolify'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: doublepaas/stable
+          fetch-depth: 0
+      - uses: docker/setup-buildx-action@v3
+      - name: Propose the latest official stable release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/doublepaas/sync-upstream.sh

@@ -1,0 +1,5 @@
+{
+  "tag": "v4.4.7",
+  "commit": "86c21c0d5babfa8c7d65a9c27e5863c629a89c7c",
+  "image": "docker.io/coollabsio/coolify:4.4.7@sha256:df5d62a743dd0a786cb604a9550243ef5ca04f610056852aff8b69faa9a06698"
+}

@@ -1,0 +1,122 @@
+name: DoublePaaS stable build
+
+on:
+  push:
+    branches: [doublepaas/stable]
+  pull_request:
+    branches: [doublepaas/stable]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doublepaas-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    if: github.repository == 'doublesharp/coolify'
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: coolify_mount_test
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, sqlite3, pdo_sqlite, pdo_pgsql, intl, zip, bcmath, gd, sockets
+          coverage: none
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: composer install --no-interaction --prefer-dist
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: API, UI, renderer and real Docker checks
+        env:
+          COOLIFY_MOUNT_DOCKER_TEST_DIR: ${{ runner.temp }}/coolify-mounts
+        run: bash scripts/doublepaas/test.sh
+      - name: PostgreSQL migration and rollback
+        env:
+          APP_ENV: testing
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5432'
+          DB_DATABASE: coolify_mount_test
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+        run: php scripts/doublepaas/check-postgres.php
+
+  build:
+    needs: test
+    if: github.ref == 'refs/heads/doublepaas/stable' && github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Read pinned official stable image
+        id: upstream
+        run: |
+          image=$(jq -r .image .doublepaas/upstream.json)
+          [[ "$image" =~ @sha256:[a-f0-9]{64}$ ]]
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/doublepaas/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          build-args: |
+            UPSTREAM_IMAGE=${{ steps.upstream.outputs.image }}
+            FORK_REVISION=${{ github.sha }}
+          tags: ghcr.io/doublesharp/coolify:sha-${{ github.sha }}-${{ matrix.arch }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish immutable revision and convenience tags
+        env:
+          REVISION: ${{ github.sha }}
+        run: |
+          image=ghcr.io/doublesharp/coolify
+          docker buildx imagetools create -t "$image:sha-$REVISION" -t "$image:doublepaas-stable" \
+            "$image:sha-$REVISION-amd64" "$image:sha-$REVISION-arm64"
+          docker buildx imagetools inspect "$image:sha-$REVISION" >> "$GITHUB_STEP_SUMMARY"
