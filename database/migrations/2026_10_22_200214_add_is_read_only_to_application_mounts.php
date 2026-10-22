@@ -17,12 +17,16 @@ return new class extends Migration
             Schema::table($name, function (Blueprint $table): void {
                 $table->boolean('is_read_only')->default(false);
             });
-            $this->applicationMounts($name)->where(function (Builder $query): void {
-                $query->where('mount_path', 'like', '%:ro')->orWhere('mount_path', 'like', '%:rw');
-            })->eachById(function (object $mount) use ($name): void {
+            $this->applicationMounts($name)->where('mount_path', 'like', '%:%')->eachById(function (object $mount) use ($name): void {
+                [$path, $mode] = explode(':', $mount->mount_path, 2);
+                $options = explode(',', $mode);
+                if (array_intersect($options, ['ro', 'rw']) === []) {
+                    return;
+                }
+                $remaining = array_values(array_diff($options, ['ro', 'rw']));
                 DB::table($name)->where('id', $mount->id)->update([
-                    'mount_path' => substr($mount->mount_path, 0, -3),
-                    'is_read_only' => str_ends_with($mount->mount_path, ':ro'),
+                    'mount_path' => $path.($remaining === [] ? '' : ':'.implode(',', $remaining)),
+                    'is_read_only' => in_array('ro', $options, true),
                 ]);
             });
         }

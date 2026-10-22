@@ -30,8 +30,9 @@ mounts. Compose applications and services continue to take access modes from
 their Compose file; their stored `is_read_only` flag is not an effective-mode
 report and cannot override Compose.
 
-The migration converts legacy application destination paths ending in `:ro` or
-`:rw` into the separate field. Its rollback restores `:ro` for protected mounts
+The migration converts legacy application destination access options `ro` or
+`rw` into the separate field, including combinations such as `:z,ro`.
+Its rollback restores `:ro` for protected mounts
 before removing the columns. The renderer also tolerates legacy suffixes and
 preserves other options without producing duplicate colons. New API and UI
 destination paths must omit access-mode suffixes. Use the access setting instead.
@@ -65,6 +66,7 @@ checks reader write denial and publisher visibility, and repeats after container
 recreation. Tests remove their containers and named volume in `finally`.
 `COOLIFY_MOUNT_DOCKER_COMMAND` optionally accepts a JSON command prefix for an
 isolated daemon, for example `["docker","exec","test-engine","/tools/docker"]`.
+The Compose CLI configuration check runs locally and requires `docker compose`.
 Run Docker cases serially.
 
 AI assisted implementation and independent Claude Opus 5.5 review were used.

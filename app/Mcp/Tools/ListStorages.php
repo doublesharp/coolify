@@ -58,6 +58,7 @@ class ListStorages extends Tool
                 'mount_path' => $s->mount_path,
                 'host_path' => $s->host_path,
                 'is_directory' => $s->is_directory ?? null,
+                ...($resourceType === 'application' ? ['is_read_only' => (bool) $s->is_read_only] : []),
             ]));
         }
 
@@ -67,6 +68,7 @@ class ListStorages extends Tool
                 'name' => $s->name ?? null,
                 'mount_path' => $s->mount_path,
                 'is_directory' => $s->is_directory ?? null,
+                ...($resourceType === 'application' ? ['is_read_only' => (bool) $s->is_read_only] : []),
             ]));
         }
 

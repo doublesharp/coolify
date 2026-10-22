@@ -11,6 +11,7 @@ use App\Models\Environment;
 use App\Models\EnvironmentVariable;
 use App\Models\GithubApp;
 use App\Models\InstanceSettings;
+use App\Models\LocalFileVolume;
 use App\Models\Project;
 use App\Models\S3Storage;
 use App\Models\ScheduledDatabaseBackup;
@@ -124,6 +125,20 @@ function mcpReadJson($response): array
 {
     return json_decode($response->json('result.content.0.text'), true);
 }
+
+test('storage listings expose application mount access', function (bool $readOnly) {
+    $this->application->persistentStorages()->create(['name' => 'data', 'mount_path' => '/data', 'is_read_only' => $readOnly]);
+    LocalFileVolume::withoutEvents(function () use ($readOnly): void {
+        $storage = $this->application->fileStorages()->make(['fs_path' => '/srv/data', 'mount_path' => '/files', 'is_directory' => true, 'is_read_only' => $readOnly]);
+        $storage->forceFill(['uuid' => new_public_id()])->save();
+    });
+
+    $response = mcpReadCall('list_storages', ['resource' => 'application', 'uuid' => $this->application->uuid]);
+    $response->assertOk();
+    $data = mcpReadJson($response)['data'];
+    expect($data['persistent_storages'][0]['is_read_only'])->toBe($readOnly);
+    expect($data['file_storages'][0]['is_read_only'])->toBe($readOnly);
+})->with([true, false]);
 
 test('tools/list includes new read tools and lifecycle tools', function () {
     $token = mcpReadToken();
