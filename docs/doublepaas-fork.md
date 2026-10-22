@@ -99,6 +99,13 @@ feature's migration rollback or restore its matching pre-fork database snapshot.
 Switching only the image can lose the effective read-only mode of migrated rows.
 Do not run `docker compose down` for promotion or replace APP_KEY.
 
+Run promotion as a transient systemd service so an SSH disconnect does not
+interrupt it. The script also handles HUP, INT and TERM with one rollback in
+the parent shell. The checkpoint restore is qualified for this additive-column
+patch. Before promoting a future release that creates new tables or other
+objects, rehearse restoring to a fresh database and update the rollback procedure
+to remove objects introduced after the checkpoint.
+
 Upstream accepts disclosed AI assistance but requires human-written Changes and
 Why sections and its contributor agreement for the upstream PR. The feature
 documentation records assistance and usage; a human must write those sections

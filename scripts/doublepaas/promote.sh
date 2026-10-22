@@ -46,8 +46,9 @@ wait_healthy() {
 }
 
 rollback() {
-  status=$?
-  trap - ERR
+  status=${1:-$?}
+  [ "$BASHPID" = "$$" ] || exit "$status"
+  trap - ERR HUP INT TERM
   set +e
   echo "Promotion failed; restoring management configuration and database from $checkpoint." >&2
   "${compose[@]}" stop coolify
@@ -89,6 +90,9 @@ print("Image pin, loopback ports and security-header mount validated.")
 
 # From here failures restore the pre-promotion management database and override.
 trap rollback ERR
+trap 'rollback 129' HUP
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 mv docker-compose.doublepaas-candidate.yml docker-compose.custom.yml
 sql() {
   docker exec coolify-db sh -c 'exec psql -X -q -v ON_ERROR_STOP=1 -tA -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "$1"
@@ -101,7 +105,7 @@ test "$(sql 'SELECT is_auto_update_enabled FROM instance_settings WHERE id=0')" 
 test "$(sql "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('local_file_volumes', 'local_persistent_volumes') AND column_name='is_read_only'")" = 2
 test "$(sql "SELECT count(*) FROM migrations WHERE migration='2026_10_22_200214_add_is_read_only_to_application_mounts'")" = 1
 cmp -s "$checkpoint/env" .env
-trap - ERR
+trap - ERR HUP INT TERM
 docker ps --format '{{.Names}} {{.ID}}' | sort > "$checkpoint/containers-after.txt"
 if ! diff <(grep -v '^coolify ' "$checkpoint/containers-before.txt") <(grep -v '^coolify ' "$checkpoint/containers-after.txt"); then
   echo 'Management passed its guards. Inspect container changes above before accepting workloads; ephemeral helpers can change during promotion.' >&2

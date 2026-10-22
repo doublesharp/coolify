@@ -22,6 +22,9 @@ git switch -c "$branch"
 # Apply the delta from the last pinned release with three-way conflict handling.
 # Do not introduce upstream workflow commits or request workflow-write authority.
 previous=$(jq -r .commit .doublepaas/upstream.json)
+if ! git cat-file -e "$previous^{commit}"; then
+  git fetch https://github.com/coollabsio/coolify.git "$previous"
+fi
 patch=${RUNNER_TEMP:?}/doublepaas-upstream.patch
 git diff --binary --full-index "$previous" "$tag" -- . ':!.github/workflows' > "$patch"
 if [ -s "$patch" ] && ! git apply --3way --index "$patch"; then
