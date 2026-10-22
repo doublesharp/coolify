@@ -32,7 +32,8 @@ OCI labels identify the fork revision and official base image.
 
 Upstream's release, publishing and issue-management workflows are removed from
 this production branch. Only `doublepaas-build.yml` and `doublepaas-sync.yml`
-operate here. Packages must be public for anonymous host pulls.
+operate here. Private package pulls use DoublePaaS's existing read-only GHCR
+credential. Public visibility is optional and permits anonymous pulls.
 
 ## Upstream updates
 
