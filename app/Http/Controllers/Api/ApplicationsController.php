@@ -5136,7 +5136,7 @@ class ApplicationsController extends Controller
             'is_preview_suffix_enabled' => 'boolean',
             'is_read_only' => 'boolean',
             'name' => ['string', 'regex:'.ValidationPatterns::VOLUME_NAME_PATTERN],
-            'mount_path' => ['string', 'not_regex:/:/'],
+            'mount_path' => ['string', ...($application->build_pack !== 'dockercompose' ? ['not_regex:/:/'] : [])],
             'content' => 'string|nullable',
         ]);
 
@@ -5331,7 +5331,7 @@ class ApplicationsController extends Controller
         $validator = customApiValidator($request->all(), [
             'type' => 'required|string|in:persistent,file',
             'name' => ['string', 'regex:'.ValidationPatterns::VOLUME_NAME_PATTERN],
-            'mount_path' => ['required', 'string', 'not_regex:/:/'],
+            'mount_path' => ['required', 'string', ...($application->build_pack !== 'dockercompose' ? ['not_regex:/:/'] : [])],
             'content' => 'string|nullable',
             'is_directory' => 'boolean',
             'is_host_file' => 'boolean',

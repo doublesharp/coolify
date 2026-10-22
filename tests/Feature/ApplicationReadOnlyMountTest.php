@@ -115,7 +115,7 @@ test('rejects access overrides for Compose mounts with 422', function (string $t
     expect($storage->refresh()->is_read_only)->toBeFalse();
 })->with(['persistent', 'file']);
 
-test('upgrades legacy access suffixes and preserves permissions on rollback', function (string $type, string $mode, bool $expected) {
+test('upgrades legacy access suffixes and preserves permissions on rollback', function (string $type, string $mode, bool $expected, string $remaining) {
     $storage = $type === 'persistent'
         ? $this->application->persistentStorages()->create(['name' => 'data', 'mount_path' => '/data'])
         : $this->application->fileStorages()->create(['fs_path' => '/srv/data', 'mount_path' => '/data', 'is_directory' => true]);
@@ -126,12 +126,16 @@ test('upgrades legacy access suffixes and preserves permissions on rollback', fu
 
     $migration->up();
 
-    expect($storage->refresh()->mount_path)->toBe('/data');
+    expect($storage->refresh()->mount_path)->toBe('/data'.$remaining);
     expect($storage->is_read_only)->toBe($expected);
     $migration->down();
-    expect(DB::table($table)->where('id', $storage->id)->value('mount_path'))->toBe($expected ? '/data:ro' : '/data');
+    expect(DB::table($table)->where('id', $storage->id)->value('mount_path'))->toBe($expected ? '/data:ro'.($remaining ? ','.substr($remaining, 1) : '') : '/data'.$remaining);
     $migration->up();
-})->with(['persistent', 'file'])->with(['read only' => ['ro', true], 'writable' => ['rw', false]]);
+})->with(['persistent', 'file'])->with([
+    'read only' => ['ro', true, ''], 'writable' => ['rw', false, ''],
+    'legacy readonly options' => ['z,ro', true, ':z'],
+    'legacy writable options' => ['rw,z', false, ':z'],
+]);
 
 test('returns 404 when a storage UUID belongs to another application', function () {
     $other = Application::factory()->create(['environment_id' => $this->application->environment_id]);
@@ -367,8 +371,8 @@ test('enforces reader and publisher permissions in Docker after recreation', fun
         if ($kind === 'named') {
             $docker(['volume', 'rm', 'coolify-mount-runtime-test'], false);
         }
-        unlink($directory.'/published');
-        rmdir($directory);
+        @unlink($directory.'/published');
+        @rmdir($directory);
     }
 })->with(['persistent', 'directory', 'named'])->skip(fn () => ! getenv('COOLIFY_MOUNT_DOCKER_TEST_DIR'), 'Set COOLIFY_MOUNT_DOCKER_TEST_DIR to an isolated temporary directory to run real Docker mount checks.');
 
