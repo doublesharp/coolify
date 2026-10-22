@@ -68,4 +68,3 @@ recreation. Tests remove their containers and named volume in `finally`.
 isolated daemon, for example `["docker","exec","test-engine","/tools/docker"]`.
 The Compose CLI configuration check runs locally and requires `docker compose`.
 Run Docker cases serially.
-
