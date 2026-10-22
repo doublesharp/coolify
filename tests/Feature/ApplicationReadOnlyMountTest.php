@@ -52,7 +52,8 @@ beforeEach(function () {
         'redirect' => 'both',
         'is_http_basic_auth_enabled' => false,
     ]);
-    $token = $this->user->createToken('mount-test', ['*'], teamId: $this->team->id);
+    session(['currentTeam' => $this->team]);
+    $token = $this->user->createToken('mount-test', ['*']);
     $token->accessToken->forceFill(['team_id' => $this->team->id])->save();
     $this->withToken($token->plainTextToken);
     $this->endpoint = "/api/v1/applications/{$this->application->uuid}/storages";
@@ -185,7 +186,7 @@ test('returns 403 when a member tries to change mount access', function () {
 
 test('returns 403 when a read token tries to change mount access', function () {
     $storage = $this->application->persistentStorages()->create(['name' => 'data', 'mount_path' => '/data']);
-    $token = $this->user->createToken('read-only-token', ['read'], teamId: $this->team->id);
+    $token = $this->user->createToken('read-only-token', ['read']);
 
     $this->withToken($token->plainTextToken)->patchJson($this->endpoint, ['type' => 'persistent', 'uuid' => $storage->uuid, 'is_read_only' => true])->assertForbidden();
 
@@ -196,7 +197,8 @@ test('returns 404 when another team owns the application', function () {
     $team = Team::factory()->create();
     $user = User::factory()->create();
     $team->members()->attach($user, ['role' => 'owner']);
-    $token = $user->createToken('foreign-token', ['*'], teamId: $team->id);
+    session(['currentTeam' => $team]);
+    $token = $user->createToken('foreign-token', ['*']);
     $storage = $this->application->persistentStorages()->create(['name' => 'data', 'mount_path' => '/data']);
 
     $this->withToken($token->plainTextToken)->patchJson($this->endpoint, ['type' => 'persistent', 'uuid' => $storage->uuid, 'is_read_only' => true])->assertNotFound();
