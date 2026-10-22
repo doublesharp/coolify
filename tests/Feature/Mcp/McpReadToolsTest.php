@@ -123,7 +123,8 @@ function mcpReadJson($response): array
     return json_decode($response->json('result.content.0.text'), true);
 }
 
-test('storage listings expose application mount access', function (bool $readOnly) {
+test('storage listings expose application mount access', function (bool $readOnly, bool $compose) {
+    $this->application->update(['build_pack' => $compose ? 'dockercompose' : 'dockerimage']);
     $this->application->persistentStorages()->create(['name' => 'data', 'mount_path' => '/data', 'is_read_only' => $readOnly]);
     LocalFileVolume::withoutEvents(function () use ($readOnly): void {
         $storage = $this->application->fileStorages()->make(['fs_path' => '/srv/data', 'mount_path' => '/files', 'is_directory' => true, 'is_read_only' => $readOnly]);
@@ -133,9 +134,15 @@ test('storage listings expose application mount access', function (bool $readOnl
     $response = mcpReadCall('list_storages', ['resource' => 'application', 'uuid' => $this->application->uuid]);
     $response->assertOk();
     $data = mcpReadJson($response)['data'];
+    if ($compose) {
+        expect($data['persistent_storages'][0])->not->toHaveKey('is_read_only');
+        expect($data['file_storages'][0])->not->toHaveKey('is_read_only');
+
+        return;
+    }
     expect($data['persistent_storages'][0]['is_read_only'])->toBe($readOnly);
     expect($data['file_storages'][0]['is_read_only'])->toBe($readOnly);
-})->with([true, false]);
+})->with([true, false])->with([true, false]);
 
 test('tools/list includes new read tools and lifecycle tools', function () {
     $token = mcpReadToken();
