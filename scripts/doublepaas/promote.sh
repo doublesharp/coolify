@@ -11,6 +11,15 @@ exec 9>/run/lock/double-paas-coolify-promotion.lock
 flock -n 9
 cd /data/coolify/source
 compose=(docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.custom.yml)
+"${compose[@]}" config --format json | python3 -c '
+import json,sys
+value=json.load(sys.stdin)["services"]["coolify"].get("environment", {}).get("AUTOUPDATE")
+if value is not None and str(value).lower() not in ("false", "(false)"):
+    raise SystemExit("Remove AUTOUPDATE or set it to false before promoting the fork.")
+'
+previous_id=$(docker inspect coolify --format '{{.Image}}')
+previous_ref=$("${compose[@]}" config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["coolify"]["image"])')
+test "$(docker image inspect "$previous_ref" --format '{{.Id}}')" = "$previous_id"
 docker pull "$image"
 test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$revision"
 test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = https://github.com/doublesharp/coolify
@@ -28,7 +37,7 @@ test -s "$checkpoint/coolify.dmp"
 wait_healthy() {
   for _ in $(seq 1 60); do
     if [ "$(docker inspect coolify --format '{{.State.Health.Status}}' 2>/dev/null)" = healthy ] && \
-       curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
+       docker exec coolify curl -fsS http://127.0.0.1:8080/api/health >/dev/null; then
       return 0
     fi
     sleep 3
@@ -44,9 +53,9 @@ rollback() {
   "${compose[@]}" stop coolify
   cp -p "$checkpoint/docker-compose.custom.yml" docker-compose.custom.yml
   # Stop all management writers before restoring. Application containers keep running.
-  if docker exec -i coolify-db sh -c 'pg_restore --clean --if-exists --no-owner -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < "$checkpoint/coolify.dmp"; then
+  if docker exec -i coolify-db sh -c 'pg_restore --single-transaction --exit-on-error --clean --if-exists --no-owner -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < "$checkpoint/coolify.dmp"; then
     "${compose[@]}" up -d --no-deps --pull never coolify
-    if wait_healthy; then
+    if wait_healthy && [ "$(docker inspect coolify --format '{{.Image}}')" = "$previous_id" ]; then
       echo 'Previous management state is healthy again.' >&2
     else
       echo "Rollback needs operator recovery from $checkpoint." >&2
@@ -81,12 +90,20 @@ print("Image pin, loopback ports and security-header mount validated.")
 # From here failures restore the pre-promotion management database and override.
 trap rollback ERR
 mv docker-compose.doublepaas-candidate.yml docker-compose.custom.yml
-docker exec coolify php artisan tinker --execute='App\Models\InstanceSettings::firstOrFail()->update(["is_auto_update_enabled" => false]);'
+sql() {
+  docker exec coolify-db sh -c 'exec psql -X -q -v ON_ERROR_STOP=1 -tA -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "$1"
+}
+test "$(sql 'UPDATE instance_settings SET is_auto_update_enabled=false WHERE id=0 RETURNING is_auto_update_enabled')" = f
 "${compose[@]}" up -d --no-deps --pull never coolify
 wait_healthy
 test "$(docker inspect coolify --format '{{.Image}}')" = "$expected_id"
-docker exec coolify php artisan tinker --execute='if (App\Models\InstanceSettings::firstOrFail()->is_auto_update_enabled) { throw new RuntimeException("Native updates must remain disabled for the fork."); } if (! Illuminate\Support\Facades\Schema::hasColumn("local_file_volumes", "is_read_only") || ! Illuminate\Support\Facades\Schema::hasColumn("local_persistent_volumes", "is_read_only")) { throw new RuntimeException("Read-only mount migration missing."); }'
-docker ps --format '{{.Names}} {{.ID}}' | sort > "$checkpoint/containers-after.txt"
-diff <(grep -v '^coolify ' "$checkpoint/containers-before.txt") <(grep -v '^coolify ' "$checkpoint/containers-after.txt")
+test "$(sql 'SELECT is_auto_update_enabled FROM instance_settings WHERE id=0')" = f
+test "$(sql "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('local_file_volumes', 'local_persistent_volumes') AND column_name='is_read_only'")" = 2
+test "$(sql "SELECT count(*) FROM migrations WHERE migration='2026_10_22_200214_add_is_read_only_to_application_mounts'")" = 1
+cmp -s "$checkpoint/env" .env
 trap - ERR
+docker ps --format '{{.Names}} {{.ID}}' | sort > "$checkpoint/containers-after.txt"
+if ! diff <(grep -v '^coolify ' "$checkpoint/containers-before.txt") <(grep -v '^coolify ' "$checkpoint/containers-after.txt"); then
+  echo 'Management passed its guards. Inspect container changes above before accepting workloads; ephemeral helpers can change during promotion.' >&2
+fi
 printf 'Serving %s\nRevision %s\nRollback checkpoint %s\n' "$image" "$revision" "$checkpoint"

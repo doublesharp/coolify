@@ -18,7 +18,9 @@ Linux runners use their disposable runner disk.
 multi-platform image digest. The fork image starts from that exact official
 runtime and replaces only application PHP, views, migrations and API specs.
 Composer dependencies and compiled CSS/JavaScript remain the official release's
-versions. The patch changes no dependency or asset source files. If a future
+versions. Each architecture checks the base image's app, views and migrations
+against the pinned tag before overlaying the patch. The patch changes no
+dependency or asset source files. If a future
 patch needs those, update the Dockerfile and checks before merging it.
 
 The build workflow runs affected tests, real Docker reader/writer checks,
@@ -35,10 +37,12 @@ operate here. Packages must be public for anonymous host pulls.
 ## Upstream updates
 
 The sync workflow checks the latest official stable GitHub release daily at
-09:17 UTC. It merges that tag into an update branch, retains the local patch,
+09:17 UTC. It applies the delta from the last pinned release to an update branch
+using Git's three-way conflict handling, retains the local patch,
 pins the new official image digest, publishes a review link and explicitly
 dispatches its tests. It never merges or deploys the PR. Merge conflicts outside
-upstream workflow files stop the job for manual resolution. Existing update
+fork operation files are excluded. Source conflicts stop the job for manual
+resolution. Existing update
 branches are left for an operator to review. Repository-wide workflow PR approval
 power stays disabled; open an internal PR from the review link when ready.
 
@@ -78,7 +82,9 @@ bash promote.sh ghcr.io/doublesharp/coolify@sha256:<64 hex characters> <40-chara
 The script validates image labels, saves a protected local database and config
 checkpoint, validates the existing override with the new image, disables native
 updates, and recreates only `coolify`. It verifies health, exact running image,
-the migration and unchanged application container IDs. A failed promotion stops
+the migration and unchanged environment, then reports container ID differences
+for workload acceptance. Ephemeral helpers do not trigger database rollback.
+A failed management guard stops
 management, restores the database and override checkpoint, and starts the prior
 management image with `--pull never`. Application containers keep running.
 

@@ -18,6 +18,7 @@ jobs:
   test:
     if: github.repository == 'doublesharp/coolify'
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:15-alpine
@@ -43,7 +44,8 @@ jobs:
       - run: composer install --no-interaction --prefer-dist
       - run: npm ci
       - run: npm run build
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install chromium
+        timeout-minutes: 5
       - name: API, UI, renderer and real Docker checks
         env:
           COOLIFY_MOUNT_DOCKER_TEST_DIR: ${{ runner.temp }}/coolify-mounts
@@ -73,6 +75,7 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
@@ -89,6 +92,8 @@ jobs:
           image=$(jq -r .image .doublepaas/upstream.json)
           [[ "$image" =~ @sha256:[a-f0-9]{64}$ ]]
           echo "image=${image}" >> "$GITHUB_OUTPUT"
+      - name: Check official image source against the pinned tag
+        run: bash scripts/doublepaas/check-upstream.sh
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -103,6 +108,7 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       packages: write
     steps:
