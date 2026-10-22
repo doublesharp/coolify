@@ -69,6 +69,3 @@ isolated daemon, for example `["docker","exec","test-engine","/tools/docker"]`.
 The Compose CLI configuration check runs locally and requires `docker compose`.
 Run Docker cases serially.
 
-AI assisted implementation and independent Claude Opus 5.5 review were used.
-An upstream PR must disclose that assistance and retain the contributor
-agreement. Its Changes and Why sections must be written by the human submitter.
