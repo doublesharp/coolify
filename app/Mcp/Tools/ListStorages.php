@@ -14,7 +14,7 @@ class ListStorages extends Tool
 {
     protected string $name = 'list_storages';
 
-    protected string $description = 'List persistent and file storage mounts for an application, database, or service owned by the authenticated team. File contents are never returned.';
+    protected string $description = 'List persistent and file storage mounts for an application, database, or service owned by the authenticated team. Non-Compose application mounts include the is_read_only setting, applied on redeploy. File contents are never returned.';
 
     use BuildsResponse;
     use ResolvesResource;

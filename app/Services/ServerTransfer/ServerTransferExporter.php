@@ -885,6 +885,7 @@ class ServerTransferExporter
                 'host_path' => $volume->host_path,
                 'is_preview_suffix_enabled' => (bool) ($volume->is_preview_suffix_enabled ?? false),
                 'ignores_compose_driver_options' => (bool) $volume->ignores_compose_driver_options,
+                'is_read_only' => (bool) $volume->is_read_only,
                 'standalone_sqlite_uuid' => $volume->standaloneSqlite?->uuid,
             ];
         }
@@ -907,6 +908,7 @@ class ServerTransferExporter
                 'content' => $storage->content,
                 'is_directory' => (bool) $storage->is_directory,
                 'is_host_file' => (bool) $storage->is_host_file,
+                'is_read_only' => (bool) $storage->is_read_only,
                 'chown' => $storage->chown,
                 'chmod' => $storage->chmod,
                 'is_based_on_git' => (bool) ($storage->is_based_on_git ?? false),

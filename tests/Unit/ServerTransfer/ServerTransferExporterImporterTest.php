@@ -913,6 +913,40 @@ test('import rejects shell-like file ownership and mode metadata', function (str
     'option mode' => ['chmod', '--reference=/etc/passwd'],
 ]);
 
+test('transfer preserves application mount access and accepts older bundles', function (?bool $readOnly) {
+    $this->application->persistentStorages()->firstOrFail()->update(['is_read_only' => (bool) $readOnly]);
+    LocalFileVolume::withoutEvents(function () use ($readOnly): void {
+        $storage = new LocalFileVolume;
+        $storage->forceFill([
+            'uuid' => new_public_id(), 'resource_id' => $this->application->id, 'resource_type' => $this->application->getMorphClass(),
+            'fs_path' => '/srv/config', 'mount_path' => '/config', 'is_directory' => true, 'is_read_only' => (bool) $readOnly,
+        ])->save();
+    });
+    $bundle = $this->exporter->export($this->server);
+    $payload = &$bundle['projects'][0]['environments'][0]['applications'][0];
+    expect($payload['persistent_storages'][0]['is_read_only'])->toBe((bool) $readOnly);
+    expect($payload['file_storages'][0]['is_read_only'])->toBe((bool) $readOnly);
+    if ($readOnly === null) {
+        unset($payload['persistent_storages'][0]['is_read_only'], $payload['file_storages'][0]['is_read_only']);
+    }
+    unset($payload);
+    $originalAppUuid = $this->application->uuid;
+    $this->service->forceDelete();
+    $this->application->forceDelete();
+    $this->database->forceDelete();
+    $this->server->forceDelete();
+    Tag::query()->delete();
+    ScheduledDatabaseBackup::query()->delete();
+    ScheduledTask::query()->delete();
+    $this->privateKey->delete();
+
+    $this->importer->import($bundle, teamId: $this->team->id, dryRun: false, preserveUuids: true, adoptMode: true);
+
+    $application = Application::where('uuid', $originalAppUuid)->sole();
+    expect($application->persistentStorages()->sole()->is_read_only)->toBe((bool) $readOnly);
+    expect($application->fileStorages()->sole()->is_read_only)->toBe((bool) $readOnly);
+})->with(['read only' => [true], 'writable' => [false], 'older bundle' => [null]]);
+
 test('transfer keeps whether a volume ignores the Compose driver options', function (?bool $exported, bool $expected) {
     LocalPersistentVolume::query()->update(['ignores_compose_driver_options' => (bool) $exported]);
     $bundle = $this->exporter->export($this->server);
