@@ -43,6 +43,19 @@
                 </div>
             @endcan
         @endif
+        @if ($resource instanceof \App\Models\Application && $resource->build_pack !== 'dockercompose')
+            @can('update', $resource)
+                <div class="w-full sm:w-96">
+                    <x-forms.listbox id="isReadOnlyMount" label="Mount access"
+                        helper="Changes take effect after redeployment." onChange="saveMountAccess" :options="[
+                            ['value' => false, 'label' => 'Read and write'],
+                            ['value' => true, 'label' => 'Read only'],
+                        ]" />
+                </div>
+            @else
+                <p class="text-sm text-neutral-500 dark:text-fg-dim">Mount access: {{ $isReadOnlyMount ? 'Read only' : 'Read and write' }}</p>
+            @endcan
+        @endif
         <form wire:submit='submit' class="flex flex-col gap-4">
             <x-unsaved-bar action="submit" />
             @if (!$isReadOnly)

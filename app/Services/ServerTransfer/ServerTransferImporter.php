@@ -1540,6 +1540,7 @@ class ServerTransferImporter
                 'name' => data_get($volume, 'name'),
                 'mount_path' => data_get($volume, 'mount_path'),
                 'host_path' => data_get($volume, 'host_path'),
+                'is_read_only' => (bool) data_get($volume, 'is_read_only', false),
                 'is_preview_suffix_enabled' => (bool) data_get($volume, 'is_preview_suffix_enabled', false),
                 // The server keeps its Docker volumes. A bundle without the flag is from a Coolify version that created them without driver options.
                 'ignores_compose_driver_options' => (bool) data_get($volume, 'ignores_compose_driver_options', true),
@@ -1619,6 +1620,7 @@ class ServerTransferImporter
                     'content' => data_get($storage, 'content'),
                     'is_directory' => (bool) data_get($storage, 'is_directory', false),
                     'is_host_file' => $isHostFile,
+                    'is_read_only' => (bool) data_get($storage, 'is_read_only', false),
                     'chown' => $chown,
                     'chmod' => $chmod,
                     'is_based_on_git' => (bool) data_get($storage, 'is_based_on_git', false),

@@ -280,7 +280,7 @@ class Storage extends Component
 
             $this->validate([
                 'name' => ValidationPatterns::volumeNameRules(),
-                'mount_path' => 'required|string',
+                'mount_path' => $this->destinationPathRules(),
             ], ValidationPatterns::volumeNameMessages());
 
             if ($reason = $this->volumeUnavailableReason) {
@@ -316,7 +316,7 @@ class Storage extends Component
             $this->authorize('update', $this->resource);
 
             $this->validate([
-                'file_storage_path' => 'required|string',
+                'file_storage_path' => $this->destinationPathRules(),
                 'file_storage_source' => 'nullable|string',
                 'file_storage_content' => 'nullable|string',
             ]);
@@ -358,7 +358,7 @@ class Storage extends Component
 
             $this->validate([
                 'host_file_storage_source' => 'required|string',
-                'host_file_storage_destination' => 'required|string',
+                'host_file_storage_destination' => $this->destinationPathRules(),
             ]);
 
             $this->host_file_storage_source = validateHostFileMountPath($this->host_file_storage_source, 'host file source path');
@@ -393,7 +393,7 @@ class Storage extends Component
 
             $this->validate([
                 'file_storage_directory_source' => 'required|string',
-                'file_storage_directory_destination' => 'required|string',
+                'file_storage_directory_destination' => $this->destinationPathRules(),
             ]);
 
             $this->file_storage_directory_source = LocalFileVolume::resolveHostPath(
@@ -425,6 +425,12 @@ class Storage extends Component
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }
+    }
+
+    /** @return list<string> */
+    private function destinationPathRules(): array
+    {
+        return ['required', 'string', ...($this->resource instanceof Application && $this->resource->build_pack !== 'dockercompose' ? ['not_regex:/:/'] : [])];
     }
 
     public function clearForm()

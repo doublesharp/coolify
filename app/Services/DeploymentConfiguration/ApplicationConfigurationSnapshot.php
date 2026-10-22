@@ -236,28 +236,28 @@ class ApplicationConfigurationSnapshot
     {
         $volumes = $this->application->persistentStorages()
             ->orderBy('id')
-            ->get(['id', 'name', 'mount_path', 'host_path'])
+            ->get(['id', 'name', 'mount_path', 'host_path', 'is_read_only'])
             ->map(function (LocalPersistentVolume $volume): array {
                 $source = $volume->host_path ?: $volume->name;
 
                 return $this->item(
                     key: 'volume_'.$volume->id,
                     label: filled($volume->host_path) ? 'Directory mount' : 'Volume mount',
-                    value: ['source' => $source, 'destination' => $volume->mount_path],
+                    value: ['source' => $source, 'destination' => $volume->mount_path, ...($volume->is_read_only ? ['is_read_only' => true] : [])],
                     impact: 'redeploy',
-                    displayValue: "{$source} → {$volume->mount_path}",
+                    displayValue: "{$source} → {$volume->mount_path}".($volume->is_read_only ? ' (read only)' : ''),
                 );
             });
 
         $fileMounts = $this->application->fileStorages()
             ->orderBy('id')
-            ->get(['id', 'fs_path', 'mount_path', 'is_directory'])
+            ->get(['id', 'fs_path', 'mount_path', 'is_directory', 'is_read_only'])
             ->map(fn (LocalFileVolume $file): array => $this->item(
                 key: 'file_'.$file->id,
                 label: $file->is_directory ? 'Directory mount' : 'File mount',
-                value: ['source' => $file->fs_path, 'destination' => $file->mount_path],
+                value: ['source' => $file->fs_path, 'destination' => $file->mount_path, ...($file->is_read_only ? ['is_read_only' => true] : [])],
                 impact: 'redeploy',
-                displayValue: "{$file->fs_path} → {$file->mount_path}",
+                displayValue: "{$file->fs_path} → {$file->mount_path}".($file->is_read_only ? ' (read only)' : ''),
             ));
 
         return collect($volumes->all())->merge($fileMounts->all())->values()->all();

@@ -16,8 +16,8 @@ class ManageStorage extends RestActionTool
     protected function actions(): array
     {
         return [
-            'create' => ['method' => 'POST', 'paths' => $this->paths('storages'), 'ability' => 'write', 'description' => 'create a storage (data: type persistent|file, name, mount_path, content, is_directory, is_host_file, fs_path; services also resource_uuid)'],
-            'update' => ['method' => 'PATCH', 'paths' => $this->paths('storages'), 'ability' => 'write', 'description' => 'update a storage (data: uuid of the storage, type, name, mount_path, content, is_preview_suffix_enabled)'],
+            'create' => ['method' => 'POST', 'paths' => $this->paths('storages'), 'ability' => 'write', 'description' => 'create a storage (data: type persistent|file, name, mount_path, content, is_directory, is_host_file, fs_path; non-Compose applications also is_read_only; services also resource_uuid)'],
+            'update' => ['method' => 'PATCH', 'paths' => $this->paths('storages'), 'ability' => 'write', 'description' => 'update a storage (data: uuid of the storage, type, name, mount_path, content, is_preview_suffix_enabled; non-Compose applications also is_read_only, applied on redeploy)'],
             'delete' => ['method' => 'DELETE', 'paths' => $this->paths('storages/{storage_uuid}'), 'ability' => 'write', 'confirm' => true, 'description' => 'delete a storage'],
             'set_backup' => ['method' => 'PUT', 'paths' => $this->paths('storages/{storage_uuid}/backups'), 'ability' => 'write', 'description' => 'create or replace the volume backup schedule (data: frequency, enabled, save_s3, s3_storage_uuid(s), stop_during_backup, retention fields ...)'],
             'remove_backup' => ['method' => 'DELETE', 'paths' => $this->paths('storages/{storage_uuid}/backups'), 'ability' => 'write', 'confirm' => true, 'description' => 'delete the volume backup schedule and its local and S3 archives'],

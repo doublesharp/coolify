@@ -21,6 +21,7 @@ use App\Models\StandaloneDocker;
 use App\Models\SwarmDocker;
 use App\Notifications\Application\DeploymentFailed;
 use App\Notifications\Application\DeploymentSuccess;
+use App\Support\ApplicationVolumeMount;
 use App\Support\RemoteSecretReferences;
 use App\Support\RemoteSecretValueFormatter;
 use App\Support\ValidationPatterns;
@@ -4299,7 +4300,7 @@ COPY ./nginx.conf /etc/nginx/conf.d/default.conf");
                 $docker_compose['services'][$this->container_name]['volumes'] = [];
             }
             $docker_compose['services'][$this->container_name]['volumes'] = array_merge($docker_compose['services'][$this->container_name]['volumes'], $persistent_file_volumes->map(function ($item) {
-                return "$item->fs_path:$item->mount_path";
+                return ApplicationVolumeMount::format($item->fs_path, $item->mount_path, (bool) $item->is_read_only);
             })->toArray());
         }
         if (count($volume_names) > 0) {
@@ -4368,7 +4369,7 @@ COPY ./nginx.conf /etc/nginx/conf.d/default.conf");
             if ($this->pull_request_id !== 0 && $isPreviewSuffixEnabled) {
                 $volume_name = addPreviewDeploymentSuffix($volume_name, $this->pull_request_id);
             }
-            $local_persistent_volumes[] = $volume_name.':'.$persistentStorage->mount_path;
+            $local_persistent_volumes[] = ApplicationVolumeMount::format($volume_name, $persistentStorage->mount_path, (bool) $persistentStorage->is_read_only);
         }
 
         return $local_persistent_volumes;
