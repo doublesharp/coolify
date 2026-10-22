@@ -36,22 +36,23 @@ operate here. Packages must be public for anonymous host pulls.
 
 The sync workflow checks the latest official stable GitHub release daily at
 09:17 UTC. It merges that tag into an update branch, retains the local patch,
-pins the new official image digest, opens an internal fork PR and explicitly
+pins the new official image digest, publishes a review link and explicitly
 dispatches its tests. It never merges or deploys the PR. Merge conflicts outside
-upstream workflow files stop the job for manual resolution. A previously opened
-PR is reused by leaving it for an operator to resolve or reopen.
+upstream workflow files stop the job for manual resolution. Existing update
+branches are left for an operator to review. Repository-wide workflow PR approval
+power stays disabled; open an internal PR from the review link when ready.
 
 ```sh
 gh workflow run doublepaas-sync.yml --repo doublesharp/coolify
 gh run list --repo doublesharp/coolify --workflow doublepaas-sync.yml
-gh pr list --repo doublesharp/coolify --base doublepaas/stable
+gh api repos/doublesharp/coolify/branches --jq '.[].name'
 ```
 
 Review the update diff, upstream release notes and test results before merging.
 When testing a manually resolved update branch, dispatch the build workflow with
 `--ref <branch>`. That runs checks without publishing an image. After merging,
 wait for the stable build, qualify its revision and promote its exact digest.
-The sync workflow needs Actions permission to create PRs; it never approves any.
+The sync workflow cannot approve pull requests or promote production.
 
 Keep the upstream contribution branch current separately with `git fetch
 upstream` and a reviewed rebase onto `upstream/next`. Once upstream ships an
