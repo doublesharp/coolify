@@ -62,7 +62,7 @@ beforeEach(function () {
     Process::fake(function ($process) {
         $this->commands[] = is_array($process->command) ? implode(' ', $process->command) : $process->command;
 
-        return Process::result(output: '');
+        return Process::result(output: str_contains(end($this->commands), '{{.Client.Version}}') ? '29.9.2' : '');
     });
 
     $this->team = Team::factory()->create();

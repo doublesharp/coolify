@@ -67,6 +67,41 @@ it('returns null summary when the endpoint fails', function () {
     expect($client->summary())->toBeNull();
 });
 
+it('uses the explicit host root mount when sentinel runs in a container', function () {
+    $client = fakeMetricsClient();
+    $client->bodies = ['/summary' => json_encode(['disk' => [
+        ['mount' => '/app/db', 'used' => 90, 'total' => 100, 'usedPercent' => 90],
+        ['mount' => '/host-root', 'used' => 28, 'total' => 100, 'usedPercent' => 28],
+    ]])];
+
+    expect($client->summary())->toMatchArray(['diskUsed' => 28, 'diskTotal' => 100, 'diskPercent' => 28.0]);
+});
+
+it('uses the explicit host root mount for disk chart history', function () {
+    $client = fakeMetricsClient();
+    $client->bodies = ['/disk/history' => json_encode([
+        ['time' => 1700000000000, 'mount' => '/app/db', 'usedPercent' => 90],
+        ['time' => 1700000000000, 'mount' => '/host-root', 'usedPercent' => 28],
+    ])];
+
+    expect($client->history('disk', '24h'))->toBe([[1699999800000, 28.0]]);
+});
+
+it('retains native root history across the host mount transition without double counting', function () {
+    $client = fakeMetricsClient();
+    $client->bodies = ['/disk/history' => json_encode([
+        ['time' => 1700000000000, 'mount' => '/', 'usedPercent' => 20],
+        ['time' => 1700000300000, 'mount' => '/', 'usedPercent' => 90],
+        ['time' => 1700000300000, 'mount' => '/host-root', 'usedPercent' => 28],
+        ['time' => 1700000600000, 'mount' => '/host-root', 'usedPercent' => 30],
+        ['time' => 1700000600000, 'mount' => '/', 'usedPercent' => 95],
+    ])];
+
+    expect($client->history('disk', '24h'))->toBe([
+        [1699999800000, 20.0], [1700000100000, 28.0], [1700000400000, 30.0],
+    ]);
+});
+
 it('normalizes containers, parsing the stringified cpu percent', function () {
     $client = fakeMetricsClient();
     $client->bodies = [

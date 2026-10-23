@@ -53,7 +53,7 @@ it('holds the per-server lock while it replaces the Sentinel container', functio
             $lockHeldDuringDockerRun = ! Cache::lock(StartSentinel::lockKey($this->server), 1)->get();
         }
 
-        return Process::result(output: '');
+        return Process::result(output: str_contains($script, '{{.Client.Version}}') ? '29.9.2' : '');
     });
 
     StartSentinel::run($this->server, restart: true, latestVersion: '1.0.2');
@@ -71,7 +71,7 @@ it('starts Sentinel with the settings saved after the server was loaded', functi
     Process::fake(function ($process) use (&$scripts) {
         $scripts[] = is_array($process->command) ? implode(' ', $process->command) : $process->command;
 
-        return Process::result(output: '');
+        return Process::result(output: str_contains(end($scripts), '{{.Client.Version}}') ? '29.9.2' : '');
     });
 
     StartSentinel::run($staleServer, restart: true, latestVersion: '1.0.2');
