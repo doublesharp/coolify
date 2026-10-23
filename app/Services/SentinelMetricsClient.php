@@ -139,9 +139,10 @@ class SentinelMetricsClient
             return [];
         }
 
-        // Disk history interleaves every mount; keep the root filesystem only.
+        // Containerized Sentinel sees the host root through its explicit read-only mount.
         if ($rootOnly && array_any($rows, fn ($row) => array_key_exists('mount', $row))) {
-            $rows = array_filter($rows, fn ($row) => ($row['mount'] ?? null) === '/');
+            $mount = array_any($rows, fn ($row) => ($row['mount'] ?? null) === '/host-root') ? '/host-root' : '/';
+            $rows = array_filter($rows, fn ($row) => ($row['mount'] ?? null) === $mount);
         }
 
         // Average raw samples into epoch-aligned buckets so every server shares the same
@@ -165,7 +166,7 @@ class SentinelMetricsClient
      */
     private function rootMount(array $mounts): array
     {
-        $root = collect($mounts)->firstWhere('mount', '/');
+        $root = collect($mounts)->firstWhere('mount', '/host-root') ?? collect($mounts)->firstWhere('mount', '/');
         if ($root === null && ! array_any($mounts, fn ($mount) => array_key_exists('mount', $mount))) {
             $root = $mounts[0] ?? null;
         }

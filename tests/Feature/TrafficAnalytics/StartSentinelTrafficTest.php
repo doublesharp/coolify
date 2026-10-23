@@ -186,6 +186,12 @@ it('starts sentinel in the host user namespace so --pid host works on a userns-r
     expect($script)->toContain('--userns host --pid host ');
 });
 
+it('exposes the host root filesystem read only without recursive submounts', function () {
+    $script = runStartSentinelAndCaptureScript(sentinelTrafficServer($this, 'TRAEFIK', analyticsEnabled: false));
+
+    expect($script)->toContain('--mount type=bind,source=/,target=/host-root,readonly,bind-recursive=disabled');
+});
+
 it('does not touch the access log when traffic analytics cannot run', function (?string $proxyType, bool $analyticsEnabled) {
     $server = sentinelTrafficServer($this, $proxyType, $analyticsEnabled);
 
