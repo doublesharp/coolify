@@ -141,8 +141,17 @@ class SentinelMetricsClient
 
         // Containerized Sentinel sees the host root through its explicit read-only mount.
         if ($rootOnly && array_any($rows, fn ($row) => array_key_exists('mount', $row))) {
-            $mount = array_any($rows, fn ($row) => ($row['mount'] ?? null) === '/host-root') ? '/host-root' : '/';
-            $rows = array_filter($rows, fn ($row) => ($row['mount'] ?? null) === $mount);
+            $roots = [];
+            foreach ($rows as $row) {
+                if (! in_array($row['mount'] ?? null, ['/', '/host-root'], true)) {
+                    continue;
+                }
+                $time = (string) ($row['time'] ?? 0);
+                if (! isset($roots[$time]) || $row['mount'] === '/host-root') {
+                    $roots[$time] = $row;
+                }
+            }
+            $rows = array_values($roots);
         }
 
         // Average raw samples into epoch-aligned buckets so every server shares the same

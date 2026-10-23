@@ -134,7 +134,7 @@ function sentinelTrafficServer(object $test, ?string $proxyType, bool $analytics
 /**
  * Runs StartSentinel against a faked SSH process and returns the remote script it sent.
  */
-function runStartSentinelAndCaptureScript(Server $server): string
+function runStartSentinelAndCaptureScript(Server $server, string $clientVersion = '29.9.2'): string
 {
     if (! InstanceSettings::query()->whereKey(0)->exists()) {
         InstanceSettings::forceCreate(['id' => 0]);
@@ -142,10 +142,10 @@ function runStartSentinelAndCaptureScript(Server $server): string
     config(['constants.ssh.mux_enabled' => false]);
     Event::fake([SentinelRestarted::class]);
     $scripts = [];
-    Process::fake(function ($process) use (&$scripts) {
+    Process::fake(function ($process) use (&$scripts, $clientVersion) {
         $scripts[] = is_array($process->command) ? implode(' ', $process->command) : $process->command;
 
-        return Process::result(output: '');
+        return Process::result(output: str_contains(end($scripts), '{{.Client.Version}}') ? $clientVersion : '');
     });
 
     StartSentinel::run($server, latestVersion: '1.0.1');
@@ -186,10 +186,27 @@ it('starts sentinel in the host user namespace so --pid host works on a userns-r
     expect($script)->toContain('--userns host --pid host ');
 });
 
-it('exposes the host root filesystem read only without recursive submounts', function () {
-    $script = runStartSentinelAndCaptureScript(sentinelTrafficServer($this, 'TRAEFIK', analyticsEnabled: false));
+it('exposes the host root read only using the supported Docker CLI mount syntax', function (string $clientVersion, string $option) {
+    $script = runStartSentinelAndCaptureScript(sentinelTrafficServer($this, 'TRAEFIK', analyticsEnabled: false), $clientVersion);
 
-    expect($script)->toContain('--mount type=bind,source=/,target=/host-root,readonly,bind-recursive=disabled');
+    expect($script)->toContain('--mount type=bind,source=/,target=/host-root,readonly,'.$option);
+})->with([
+    ['24.0.9', 'bind-nonrecursive=true'],
+    ['25.0.0', 'bind-recursive=disabled'],
+    ['29.9.2', 'bind-recursive=disabled'],
+]);
+
+it('keeps the existing sentinel when the Docker CLI version cannot be identified', function () {
+    $server = sentinelTrafficServer($this, 'TRAEFIK', analyticsEnabled: false);
+    $commands = [];
+    Process::fake(function ($process) use (&$commands) {
+        $commands[] = is_array($process->command) ? implode(' ', $process->command) : $process->command;
+
+        return Process::result(output: 'unknown');
+    });
+
+    expect(fn () => StartSentinel::run($server, restart: true, latestVersion: '1.0.1'))->toThrow(RuntimeException::class);
+    expect(implode("\n", $commands))->not->toContain('docker rm');
 });
 
 it('does not touch the access log when traffic analytics cannot run', function (?string $proxyType, bool $analyticsEnabled) {
