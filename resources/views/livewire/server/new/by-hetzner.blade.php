@@ -8,7 +8,7 @@
             <p class="text-[11px] text-neutral-500 dark:text-fg-faint">
                 New to Hetzner?
                 <a href="https://coolify.io/hetzner" target="_blank"
-                    class="font-medium text-coollabs hover:underline dark:text-warning">Create an account</a>
+                    class="font-medium text-coollabs hover:underline dark:text-brand-light">Create an account</a>
                 through Coolify's affiliate link.
             </p>
         </div>
@@ -17,9 +17,7 @@
             @if ($loading_data)
                 <x-application.settings-section title="Loading Hetzner"
                     description="Fetching locations, server types, images, and account resources.">
-                    <div class="flex min-h-40 items-center justify-center">
-                        <x-loading text="Loading Hetzner data..." />
-                    </div>
+                    <x-skeleton.form :fields="6" label="Loading Hetzner data" />
                 </x-application.settings-section>
             @elseif ($provider_data_error)
                 <x-application.settings-section title="Unable to load Hetzner"

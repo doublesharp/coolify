@@ -2,6 +2,8 @@
 # Run as root on DoublePaaS after qualifying this exact image revision.
 set -Eeuo pipefail
 umask 077
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+test -r "$script_dir/restore-database.sh"
 image=${1:?Usage: promote.sh ghcr.io/doublesharp/coolify@sha256:DIGEST REVISION}
 revision=${2:?Supply the expected full Git revision}
 [[ "$image" =~ ^ghcr\.io/doublesharp/coolify@sha256:[a-f0-9]{64}$ ]]
@@ -31,8 +33,6 @@ cp -p docker-compose.custom.yml "$checkpoint/docker-compose.custom.yml"
 cp -p .env "$checkpoint/env"
 docker inspect coolify --format '{{.Config.Image}} {{.Image}}' > "$checkpoint/previous-image.txt"
 docker ps --format '{{.Names}} {{.ID}}' | sort > "$checkpoint/containers-before.txt"
-docker exec coolify-db sh -c 'pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"' > "$checkpoint/coolify.dmp"
-test -s "$checkpoint/coolify.dmp"
 
 wait_healthy() {
   for _ in $(seq 1 60); do
@@ -51,11 +51,20 @@ rollback() {
   trap - ERR HUP INT TERM
   set +e
   echo "Promotion failed; restoring management configuration and database from $checkpoint." >&2
-  "${compose[@]}" stop coolify
-  cp -p "$checkpoint/docker-compose.custom.yml" docker-compose.custom.yml
+  if ! "${compose[@]}" stop coolify || [ "$(docker inspect coolify --format '{{.State.Running}}')" != false ]; then
+    echo 'Could not stop management writers. Database restoration was not attempted.' >&2
+    exit "$status"
+  fi
+  if ! cp -p "$checkpoint/docker-compose.custom.yml" docker-compose.custom.yml; then
+    echo "Could not restore the override. Recover from $checkpoint with management stopped." >&2
+    exit "$status"
+  fi
   # Stop all management writers before restoring. Application containers keep running.
-  if docker exec -i coolify-db sh -c 'pg_restore --single-transaction --exit-on-error --clean --if-exists --no-owner -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < "$checkpoint/coolify.dmp"; then
-    "${compose[@]}" up -d --no-deps --pull never coolify
+  if bash "$script_dir/restore-database.sh" coolify-db "$checkpoint/coolify.dmp"; then
+    if ! "${compose[@]}" up -d --no-deps --pull never coolify; then
+      echo "Could not restart the prior management image. Recover from $checkpoint." >&2
+      exit "$status"
+    fi
     if wait_healthy && [ "$(docker inspect coolify --format '{{.Image}}')" = "$previous_id" ]; then
       echo 'Previous management state is healthy again.' >&2
     else
@@ -88,7 +97,28 @@ assert any(v.get("target") == "/etc/nginx/conf.d/zz-double-paas-security-headers
 print("Image pin, loopback ports and security-header mount validated.")
 ' "$image"
 
-# From here failures restore the pre-promotion management database and override.
+# Stop all management writers before creating the rollback database checkpoint.
+# Hosted applications remain running throughout management maintenance.
+restart_unchanged() {
+  status=${1:-$?}
+  [ "$BASHPID" = "$$" ] || exit "$status"
+  trap - ERR HUP INT TERM
+  "${compose[@]}" up -d --no-deps --pull never coolify || true
+  exit "$status"
+}
+trap restart_unchanged ERR
+trap 'restart_unchanged 129' HUP
+trap 'restart_unchanged 130' INT
+trap 'restart_unchanged 143' TERM
+test "$(docker exec coolify-db sh -c 'exec psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT count(*) FROM application_deployment_queues WHERE status IN ('"'"'queued'"'"', '"'"'in_progress'"'"')"')" = 0
+"${compose[@]}" stop coolify
+test "$(docker inspect coolify --format '{{.State.Running}}')" = false
+if ! docker exec coolify-db sh -c 'pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"' > "$checkpoint/coolify.dmp" || [ ! -s "$checkpoint/coolify.dmp" ]; then
+  echo 'Checkpoint failed before promotion; restarting the unchanged management image.' >&2
+  "${compose[@]}" up -d --no-deps --pull never coolify
+  exit 1
+fi
+# From here failures restore the quiescent database and override checkpoint.
 trap rollback ERR
 trap 'rollback 129' HUP
 trap 'rollback 130' INT

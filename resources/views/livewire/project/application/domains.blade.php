@@ -1,6 +1,4 @@
 @php
-    $configuredCount = collect($domainRows)->where('is_suggested', false)->count();
-    $suggestedCount = collect($domainRows)->where('is_suggested', true)->count();
     $hasRows = count($domainRows) > 0;
     $hasDnsChecksInProgress = collect($domainRows)->contains(fn ($row) => $row['dns_status'] === 'checking');
     $composeDomainGroups = collect($domainRows)
@@ -16,7 +14,7 @@
         domainSearch: '',
         modalOpen: @js($showEditDomainModal || $editDomainDnsFailed),
         editingServiceLabel: @js($editingService ?? ''),
-        openEditDomain(index, domain, parts, service, indexing, redirect) {
+        openEditDomain(index, domain, parts, service, indexing, redirect, inheritedPort) {
             if (index !== undefined) {
                 $wire.set('editingIndex', index, false);
                 $wire.set('editingDomain', domain, false);
@@ -28,6 +26,7 @@
                 $wire.set('editingOriginalRedirect', redirect, false);
                 $wire.set('editingDomainWasRegenerated', false, false);
                 $wire.set('editingGeneratedHost', null, false);
+                $wire.set('editingInheritedPort', inheritedPort ?? null, false);
             }
             this.editingServiceLabel = service ?? $wire.editingService ?? '';
             this.modalOpen = true;
@@ -81,25 +80,16 @@
     @endcannot
 
     {{-- Toolbar --}}
-    <div class="flex flex-wrap items-center gap-2">
-        <div class="min-w-0 flex-1">
-            <h2 id="domains-section">Domains</h2>
-            <p class="text-[13px] text-neutral-500 dark:text-fg-dim">
-                {{ $configuredCount }} domain{{ $configuredCount === 1 ? '' : 's' }}
-                @if ($suggestedCount > 0)
-                    · {{ $suggestedCount }} not added
-                @endif
-            </p>
-        </div>
+    <div id="domains-section" class="flex flex-wrap items-center gap-2">
+        @if ($hasRows)
+            <div class="relative w-full sm:w-64">
+                <x-reicon name="search"
+                    class="pointer-events-none absolute top-1/2 left-2.5 z-10 size-3.5 -translate-y-1/2 text-neutral-400 dark:text-fg-faint" />
+                <input type="search" x-model="domainSearch" aria-label="Search services or domains"
+                    class="input h-8! w-full pl-8! text-[13px]!" placeholder="Search services or domains" />
+            </div>
+        @endif
         <div class="ml-auto flex flex-wrap items-center gap-2">
-            @if ($hasRows)
-                <div class="relative w-full sm:w-64">
-                    <x-reicon name="search"
-                        class="pointer-events-none absolute top-1/2 left-2.5 z-10 size-3.5 -translate-y-1/2 text-neutral-400 dark:text-fg-faint" />
-                    <input type="search" x-model="domainSearch" aria-label="Search services or domains"
-                        class="input h-8! w-full pl-8! text-[13px]!" placeholder="Search services or domains" />
-                </div>
-            @endif
             @can('update', $application)
                 <x-forms.button wire:click="checkAllDns" :showLoadingIndicator="false" wire:loading.attr="disabled" wire:target="checkAllDns,checkDomainDns">
                     <x-reicon name="refresh" class="size-3.5" />
@@ -166,16 +156,28 @@
         </div>
     </div>
 
-    @if ($hasHttpsDomains && ! $labelsAreWritable)
+    @if ($hasRows && ! $labelsAreWritable)
         <div class="flex flex-wrap items-center justify-end gap-2 service-domains-https">
-            <label for="isForceHttpsEnabled-trigger" class="mb-0! text-[12px]!">Redirect HTTP to HTTPS</label>
-            <x-helper helper="Disable only when Cloudflare Tunnel or another proxy connects to Coolify over HTTP. Keep enabled when Cloudflare uses Full or Full (Strict) SSL." />
-            <div class="w-28 shrink-0">
-                <x-forms.listbox canGate="update" :canResource="$application" id="isForceHttpsEnabled"
-                    onChange="updateForceHttps" portal
+            @if ($hasHttpsDomains)
+                <label for="isForceHttpsEnabled-trigger" class="mb-0! text-[12px]!">Redirect HTTP to HTTPS</label>
+                <x-helper helper="Disable only when Cloudflare Tunnel or another proxy connects to Coolify over HTTP. Keep enabled when Cloudflare uses Full or Full (Strict) SSL." />
+                <div class="w-28 shrink-0">
+                    <x-forms.listbox canGate="update" :canResource="$application" id="isForceHttpsEnabled"
+                        onChange="updateForceHttps" portal
+                        :options="[
+                            ['value' => true, 'label' => 'Enabled'],
+                            ['value' => false, 'label' => 'Disabled'],
+                        ]" :disabled="! auth()->user()->can('update', $application)" />
+                </div>
+            @endif
+            <label for="isPermanentRedirectEnabled-trigger" class="mb-0! text-[12px]!">Redirect type</label>
+            <x-helper helper="Applies to the HTTP to HTTPS and www redirects. Permanent (301/308) is better for SEO, but browsers cache it. Use Temporary (302/307) while you test a redirect." />
+            <div class="w-32 shrink-0">
+                <x-forms.listbox canGate="update" :canResource="$application" id="isPermanentRedirectEnabled"
+                    onChange="updatePermanentRedirect" portal
                     :options="[
-                        ['value' => true, 'label' => 'Enabled'],
-                        ['value' => false, 'label' => 'Disabled'],
+                        ['value' => false, 'label' => 'Temporary'],
+                        ['value' => true, 'label' => 'Permanent'],
                     ]" :disabled="! auth()->user()->can('update', $application)" />
             </div>
         </div>
@@ -327,7 +329,8 @@
                                     <input type="text" class="input" readonly x-bind:value="editingServiceLabel" />
                                 </div>
 
-                                <x-forms.domain-input id="editingDomainParts" errorId="editingDomain" />
+                                <x-forms.domain-input id="editingDomainParts" errorId="editingDomain"
+                                    inheritedPortExpression="$wire.editingInheritedPort" />
 
                                 @if ($editDomainDnsFailed)
                                     <x-callout type="danger" title="DNS is not pointing to the right IP">

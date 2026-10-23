@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Traits\Auditable;
 use App\Traits\ClearsGlobalSearchCache;
 use App\Traits\HasDatabaseHealthCheck;
+use App\Traits\HasLogRedactionSetting;
 use App\Traits\HasMetrics;
 use App\Traits\HasSafeStringAttribute;
 use App\Traits\HasSecretManager;
@@ -16,7 +17,7 @@ use InvalidArgumentException;
 
 class StandaloneSqlite extends BaseModel
 {
-    use Auditable, ClearsGlobalSearchCache, HasDatabaseHealthCheck, HasFactory, HasMetrics, HasSafeStringAttribute, HasSecretManager, SoftDeletes;
+    use Auditable, ClearsGlobalSearchCache, HasDatabaseHealthCheck, HasFactory, HasLogRedactionSetting, HasMetrics, HasSafeStringAttribute, HasSecretManager, SoftDeletes;
 
     public const DATA_DIRECTORY = '/var/lib/sqlite';
 
@@ -59,6 +60,7 @@ class StandaloneSqlite extends BaseModel
     protected $appends = ['database_type', 'server_status'];
 
     protected $casts = [
+        'include_coolify_default_variables' => 'boolean',
         'health_check_enabled' => 'boolean',
         'health_check_interval' => 'integer',
         'health_check_timeout' => 'integer',

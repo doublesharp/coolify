@@ -30,6 +30,7 @@ use OpenApi\Attributes as OA;
 class ServicesController extends Controller
 {
     use Concerns\HandlesTagsApi;
+    use Concerns\RequiresDeployAbility;
     use Concerns\RequiresDeployForOutsideHostPaths;
 
     protected function findTaggableResource(string $uuid, int|string $teamId): mixed
@@ -210,6 +211,7 @@ class ServicesController extends Controller
 
             $application->fqdn = $containerUrls;
             $application->save();
+            updateCompose($application);
         });
 
         if (! empty($errors)) {
@@ -308,6 +310,7 @@ class ServicesController extends Controller
                         'destination_uuid' => ['type' => 'string', 'description' => 'Destination UUID. Required if server has multiple destinations.'],
                         'instant_deploy' => ['type' => 'boolean', 'default' => false, 'description' => 'Start the service immediately after creation.'],
                         'docker_compose_raw' => ['type' => 'string', 'description' => 'The base64 encoded Docker Compose content.'],
+                        'connect_to_docker_network' => ['type' => 'boolean', 'default' => false, 'description' => 'Connect the service to the predefined docker network.'],
                         'urls' => [
                             'type' => 'array',
                             'description' => 'Array of URLs to be applied to containers of a service.',
@@ -321,6 +324,7 @@ class ServicesController extends Controller
                         ],
                         'force_domain_override' => ['type' => 'boolean', 'default' => false, 'description' => 'Force domain override even if conflicts are detected.'],
                         'is_container_label_escape_enabled' => ['type' => 'boolean', 'default' => true, 'description' => 'Escape special characters in labels. By default, $ (and other chars) is escaped. If you want to use env variables inside the labels, turn this off.'],
+                        'redact_all_env_values_in_logs' => ['type' => 'boolean', 'default' => true, 'description' => 'Redact all environment variable values in logs. When false, only locked (shown once) values are redacted. Requires team admin permissions.'],
                         'tags' => ['type' => 'array', 'items' => new OA\Items(type: 'string'), 'description' => 'Tags to assign to the service.'],
                     ],
                 ),
@@ -388,7 +392,7 @@ class ServicesController extends Controller
     )]
     public function create_service(Request $request)
     {
-        $allowedFields = ['type', 'name', 'description', 'project_uuid', 'environment_name', 'environment_uuid', 'server_uuid', 'destination_uuid', 'instant_deploy', 'docker_compose_raw', 'urls', 'force_domain_override', 'is_container_label_escape_enabled', 'tags'];
+        $allowedFields = ['type', 'name', 'description', 'project_uuid', 'environment_name', 'environment_uuid', 'server_uuid', 'destination_uuid', 'instant_deploy', 'docker_compose_raw', 'connect_to_docker_network', 'urls', 'force_domain_override', 'is_container_label_escape_enabled', 'redact_all_env_values_in_logs', 'tags'];
 
         $teamId = getTeamIdFromToken();
         if (is_null($teamId)) {
@@ -416,12 +420,14 @@ class ServicesController extends Controller
             'name' => 'string|max:255',
             'description' => 'string|nullable',
             'instant_deploy' => 'boolean',
+            'connect_to_docker_network' => 'boolean',
             'urls' => 'array|nullable',
             'urls.*' => 'array:name,url',
             'urls.*.name' => 'string|required',
             'urls.*.url' => ValidationPatterns::applicationDomainRules(),
             'force_domain_override' => 'boolean',
             'is_container_label_escape_enabled' => 'boolean',
+            'redact_all_env_values_in_logs' => 'boolean',
             'tags' => 'array|nullable',
             'tags.*' => 'string|min:2',
         ];
@@ -544,7 +550,7 @@ class ServicesController extends Controller
                     'destination_id' => $destination->id,
                     'destination_type' => $destination->getMorphClass(),
                 ];
-                if (in_array($oneClickServiceName, NEEDS_TO_CONNECT_TO_PREDEFINED_NETWORK)) {
+                if (in_array($oneClickServiceName, NEEDS_TO_CONNECT_TO_PREDEFINED_NETWORK) || $request->boolean('connect_to_docker_network')) {
                     data_set($servicePayload, 'connect_to_docker_network', true);
                 }
                 $service = new Service($servicePayload);
@@ -553,6 +559,9 @@ class ServicesController extends Controller
                 $service->description = $request->description;
                 if ($request->has('is_container_label_escape_enabled')) {
                     $service->is_container_label_escape_enabled = $request->boolean('is_container_label_escape_enabled');
+                }
+                if ($request->has('redact_all_env_values_in_logs')) {
+                    $service->redact_all_env_values_in_logs = $request->boolean('redact_all_env_values_in_logs');
                 }
                 $service->save();
                 if ($oneClickDotEnvs?->count() > 0) {
@@ -622,7 +631,7 @@ class ServicesController extends Controller
 
             return response()->json(['message' => 'Service not found.', 'valid_service_types' => $serviceKeys], 404);
         } elseif (filled($request->docker_compose_raw)) {
-            $allowedFields = ['name', 'description', 'project_uuid', 'environment_name', 'environment_uuid', 'server_uuid', 'destination_uuid', 'instant_deploy', 'docker_compose_raw', 'connect_to_docker_network', 'urls', 'force_domain_override', 'is_container_label_escape_enabled', 'tags'];
+            $allowedFields = ['name', 'description', 'project_uuid', 'environment_name', 'environment_uuid', 'server_uuid', 'destination_uuid', 'instant_deploy', 'docker_compose_raw', 'connect_to_docker_network', 'urls', 'force_domain_override', 'is_container_label_escape_enabled', 'redact_all_env_values_in_logs', 'tags'];
 
             $validationRules = [
                 'project_uuid' => 'string|required',
@@ -641,6 +650,7 @@ class ServicesController extends Controller
                 'urls.*.url' => ValidationPatterns::applicationDomainRules(),
                 'force_domain_override' => 'boolean',
                 'is_container_label_escape_enabled' => 'boolean',
+                'redact_all_env_values_in_logs' => 'boolean',
                 'tags' => 'array|nullable',
                 'tags.*' => 'string|min:2',
             ];
@@ -756,6 +766,9 @@ class ServicesController extends Controller
             $service->connect_to_docker_network = $connectToDockerNetwork;
             if ($request->has('is_container_label_escape_enabled')) {
                 $service->is_container_label_escape_enabled = $request->boolean('is_container_label_escape_enabled');
+            }
+            if ($request->has('redact_all_env_values_in_logs')) {
+                $service->redact_all_env_values_in_logs = $request->boolean('redact_all_env_values_in_logs');
             }
             $service->save();
 
@@ -985,7 +998,10 @@ class ServicesController extends Controller
 
         $lines = normalizeLogLines($request->query('lines'));
         $showTimestamps = parseLogTimestampFlag($request->query('show_timestamps'));
-        $logs = getContainerLogs($service->destination->server, $container['ID'], $lines, $showTimestamps);
+        $logs = sanitizeLogsForExport(
+            getContainerLogs($service->destination->server, $container['ID'], $lines, $showTimestamps),
+            EnvironmentVariable::logRedactionSecretsFor($service),
+        );
 
         return response()->json([
             'logs' => $logs,
@@ -994,7 +1010,7 @@ class ServicesController extends Controller
 
     #[OA\Delete(
         summary: 'Delete',
-        description: 'Delete service by UUID.',
+        description: 'Delete service by UUID. Needs a token with the write and deploy permissions.',
         path: '/services/{uuid}',
         operationId: 'delete-service-by-uuid',
         security: [
@@ -1037,6 +1053,7 @@ class ServicesController extends Controller
                 response: 404,
                 ref: '#/components/responses/404',
             ),
+            new OA\Response(response: 403, description: 'The token needs the write and deploy permissions.'),
         ]
     )]
     public function delete_by_uuid(Request $request)
@@ -1132,6 +1149,7 @@ class ServicesController extends Controller
                             ],
                             'force_domain_override' => ['type' => 'boolean', 'default' => false, 'description' => 'Force domain override even if conflicts are detected.'],
                             'is_container_label_escape_enabled' => ['type' => 'boolean', 'default' => true, 'description' => 'Escape special characters in labels. By default, $ (and other chars) is escaped. If you want to use env variables inside the labels, turn this off.'],
+                            'redact_all_env_values_in_logs' => ['type' => 'boolean', 'default' => true, 'description' => 'Redact all environment variable values in logs. When false, only locked (shown once) values are redacted. Requires team admin permissions.'],
                         ],
                     )
                 ),
@@ -1220,12 +1238,16 @@ class ServicesController extends Controller
 
         $this->authorize('update', $service);
 
+        if ($request->has('redact_all_env_values_in_logs')) {
+            $this->authorize('manageEnvironment', $service);
+        }
+
         if ($request->boolean('instant_deploy')) {
             abort_unless($request->user()->tokenCan('deploy') || $request->user()->tokenCan('root'), 403, 'Missing required permissions: deploy');
             $this->authorize('deploy', $service);
         }
 
-        $allowedFields = ['name', 'description', 'instant_deploy', 'docker_compose_raw', 'connect_to_docker_network', 'urls', 'force_domain_override', 'is_container_label_escape_enabled'];
+        $allowedFields = ['name', 'description', 'instant_deploy', 'docker_compose_raw', 'connect_to_docker_network', 'urls', 'force_domain_override', 'is_container_label_escape_enabled', 'redact_all_env_values_in_logs'];
 
         $validationRules = [
             'name' => 'string|max:255',
@@ -1239,6 +1261,7 @@ class ServicesController extends Controller
             'urls.*.url' => ValidationPatterns::applicationDomainRules(),
             'force_domain_override' => 'boolean',
             'is_container_label_escape_enabled' => 'boolean',
+            'redact_all_env_values_in_logs' => 'boolean',
         ];
         $validationMessages = [
             'urls.*.array' => 'An item in the urls array has invalid fields. Only name and url fields are supported.',
@@ -1305,6 +1328,9 @@ class ServicesController extends Controller
         }
         if ($request->has('is_container_label_escape_enabled')) {
             $service->is_container_label_escape_enabled = $request->boolean('is_container_label_escape_enabled');
+        }
+        if ($request->has('redact_all_env_values_in_logs')) {
+            $service->redact_all_env_values_in_logs = $request->boolean('redact_all_env_values_in_logs');
         }
         $previousDnsHostnames = $this->serviceApplicationDnsHostnames($service);
         $service->save();
@@ -2474,7 +2500,7 @@ class ServicesController extends Controller
                             'resource_uuid' => ['type' => 'string', 'description' => 'UUID of the service application or database sub-resource.'],
                             'name' => ['type' => 'string', 'description' => 'Volume name (persistent only, required for persistent).'],
                             'mount_path' => ['type' => 'string', 'description' => 'The container mount path.'],
-                            'content' => ['type' => 'string', 'nullable' => true, 'description' => 'File content (file only, optional).'],
+                            'content' => ['type' => 'string', 'nullable' => true, 'description' => 'File content (file only, optional). Needs the deploy ability when set.'],
                             'is_directory' => ['type' => 'boolean', 'description' => 'Whether this is a directory mount (file only, default false).'],
                             'fs_path' => ['type' => 'string', 'description' => 'Host path. Required for directory mounts and host file mounts. Optional for file mounts with content (default: inside the resource directory). An absolute path can be anywhere on the host; a relative path is inside the resource directory. A directory or file mount outside the resource directory needs a token with the deploy permission. Coolify never deletes a path outside the resource directory.'],
                         ],
@@ -2492,7 +2518,7 @@ class ServicesController extends Controller
             new OA\Response(response: 401, ref: '#/components/responses/401'),
             new OA\Response(response: 400, ref: '#/components/responses/400'),
             new OA\Response(response: 404, ref: '#/components/responses/404'),
-            new OA\Response(response: 403, description: 'The token needs the deploy permission for a mount outside the resource directory.'),
+            new OA\Response(response: 403, description: 'The token needs the deploy permission for a mount outside the resource directory or for a file storage with content.'),
             new OA\Response(response: 422, ref: '#/components/responses/422'),
         ]
     )]
@@ -2696,6 +2722,13 @@ class ServicesController extends Controller
                     'message' => 'Validation failed.',
                     'errors' => [$request->filled('fs_path') ? 'fs_path' : 'mount_path' => $e->getMessage()],
                 ], 422);
+            }
+
+            if ($request->filled('content')) {
+                $forbidden = $this->deployAbilityForbiddenResponse($request, 'Coolify writes the file content on the server immediately, so it needs a token with the deploy permission.');
+                if ($forbidden) {
+                    return $forbidden;
+                }
             }
 
             $storage = LocalFileVolume::create([
@@ -3235,7 +3268,7 @@ class ServicesController extends Controller
                 properties: [
                     new OA\Property(property: 'destination_uuid', type: 'string'),
                     new OA\Property(property: 'name', type: 'string', nullable: true),
-                    new OA\Property(property: 'clone_volumes', type: 'boolean', default: false),
+                    new OA\Property(property: 'clone_volumes', type: 'boolean', default: false, description: 'Whether to clone volume data. Needs the deploy ability.'),
                 ]
             )
         ),
@@ -3243,6 +3276,7 @@ class ServicesController extends Controller
             new OA\Response(response: 201, description: 'Service cloned.'),
             new OA\Response(response: 400, ref: '#/components/responses/400'),
             new OA\Response(response: 401, ref: '#/components/responses/401'),
+            new OA\Response(response: 403, description: 'The token needs the deploy ability to clone volume data.'),
             new OA\Response(response: 404, ref: '#/components/responses/404'),
             new OA\Response(response: 422, ref: '#/components/responses/422'),
         ]
@@ -3284,6 +3318,10 @@ class ServicesController extends Controller
         }
 
         $this->authorize('update', $service);
+
+        if ($request->boolean('clone_volumes') && $response = $this->deployAbilityForbiddenResponse($request, 'Cloning volume data stops and starts the source resource, so it needs a token with the deploy permission.')) {
+            return $response;
+        }
 
         $destination = StandaloneDocker::ownedByCurrentTeamAPI($teamId)->where('uuid', $request->destination_uuid)->first()
             ?? SwarmDocker::ownedByCurrentTeamAPI($teamId)->where('uuid', $request->destination_uuid)->first();
@@ -3399,7 +3437,7 @@ class ServicesController extends Controller
             }
 
             foreach ($sourceDatabase->scheduledBackups()->get() as $backup) {
-                $backup->replicate([
+                $newBackup = $backup->replicate([
                     'id',
                     'created_at',
                     'updated_at',
@@ -3408,7 +3446,9 @@ class ServicesController extends Controller
                     'database_id' => $database->id,
                     'database_type' => $database->getMorphClass(),
                     'team_id' => $teamId,
-                ])->save();
+                ]);
+                $newBackup->save();
+                $backup->copyS3StoragesTo($newBackup);
             }
         }
 

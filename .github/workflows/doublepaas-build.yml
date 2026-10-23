@@ -60,6 +60,8 @@ jobs:
           DB_USERNAME: postgres
           DB_PASSWORD: postgres
         run: php scripts/doublepaas/check-postgres.php
+      - name: Management checkpoint recovery and failure preservation
+        run: bash scripts/doublepaas/test-restore.sh
 
   build:
     needs: test

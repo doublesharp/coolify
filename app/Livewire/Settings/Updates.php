@@ -130,7 +130,7 @@ class Updates extends Component
             if ($this->is_auto_update_enabled && ! validate_cron_expression($this->auto_update_frequency)) {
                 $this->dispatch('error', 'Invalid Cron / Human expression for Auto Update Frequency.');
                 if (empty($this->auto_update_frequency)) {
-                    $this->auto_update_frequency = '0 0 * * *';
+                    $this->auto_update_frequency = InstanceSettings::randomAutoUpdateFrequency();
                 }
 
                 return;
@@ -159,7 +159,7 @@ class Updates extends Component
     public function checkManually()
     {
         $this->authorize('update', $this->settings);
-        CheckForUpdatesJob::dispatchSync();
+        CheckForUpdatesJob::dispatchSync(cdnTries: 1);
         $this->dispatch('updateAvailable');
         $settings = instanceSettings();
         if ($settings->new_version_available) {

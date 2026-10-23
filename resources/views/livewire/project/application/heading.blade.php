@@ -1,12 +1,21 @@
 <nav wire:poll.10000ms="checkStatus" class="w-full max-w-none pb-4 md:pb-6 lg:pb-0">
     <div>
+        @if ($application->build_pack === 'nixpacks')
+            <x-callout type="warning" title="Nixpacks is deprecated" class="mb-4">
+                {{ config('deprecations.nixpacks') }}
+                <a class="underline" href="{{ route('project.application.configuration', $parameters) }}" {{ wireNavigate() }}>
+                    Switch to Railpack in General settings.
+                </a>
+            </x-callout>
+        @endif
+
         <div class="mb-3 w-full xl:hidden">
             <div class="flex min-w-0 flex-col items-start gap-2">
                 <h1 class="min-w-0 max-w-full truncate text-[24px]! leading-7! font-semibold! tracking-tight! text-black dark:text-fg">
                     {{ $application->name }}
                 </h1>
                 <div class="relative flex w-full min-w-0 items-center gap-2">
-                    <x-status-summary :status="$application->status" align="right"
+                    <x-status-summary :status="$application->status"
                         :healthcheck-url="route('project.application.healthcheck', $parameters)" />
                     <x-applications.links :application="$application" compact />
                     @if ($this->runningDeploymentUrl)
@@ -58,13 +67,13 @@
                             @else
                                 <x-slot:main wire:click="deploy">
                                     <x-reicon name="refresh" class="size-3.5" />
-                                    Deploy
+                                    Redeploy
                                 </x-slot:main>
                                 <button type="button" class="listbox-option justify-start! gap-2.5!"
                                     wire:click="{{ str($application->status)->startsWith('running') ? 'force_deploy_without_cache' : 'deploy(true)' }}"
                                     @click="open = false" role="menuitem">
                                     <x-reicon name="refresh" class="size-3.5 opacity-70" />
-                                    Deploy (without cache)
+                                    Redeploy (without cache)
                                 </button>
                                 @if ($application->build_pack !== 'dockercompose')
                                     <button type="button" class="listbox-option justify-start! gap-2.5!"
@@ -165,13 +174,13 @@
                                     @else
                                         <x-slot:main wire:click="deploy">
                                             <x-reicon name="refresh" class="size-3.5" />
-                                            Deploy
+                                            Redeploy
                                         </x-slot:main>
                                         <button type="button" class="listbox-option justify-start! gap-2.5!"
                                             wire:click="{{ str($application->status)->startsWith('running') ? 'force_deploy_without_cache' : 'deploy(true)' }}"
                                             @click="open = false" role="menuitem">
                                             <x-reicon name="refresh" class="size-3.5 opacity-70" />
-                                            Deploy (without cache)
+                                            Redeploy (without cache)
                                         </button>
                                         @if ($application->build_pack !== 'dockercompose')
                                             <button type="button" class="listbox-option justify-start! gap-2.5!"

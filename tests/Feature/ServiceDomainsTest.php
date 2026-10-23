@@ -160,7 +160,6 @@ it('groups configured domains and shows redirect settings in the table', functio
         ->toContain('<span>DNS status</span>')
         ->not->toContain('<span>Last checked</span>')
         ->not->toContain("service-domain-group-{$this->webApp->id}")
-        ->and(substr_count($html, '2 domains'))->toBe(1)
         ->and(substr_count($html, '<span>Domain</span>'))->toBe(1)
         ->and(substr_count($html, "id=\"service-domain-group-{$this->apiApp->id}\""))->toBe(1);
 });
@@ -258,6 +257,17 @@ it('shows and persists the HTTP redirect control for HTTPS service applications'
 
     expect($this->apiApp->fresh()->is_force_https_enabled)->toBeFalse();
     expect($this->service->fresh()->docker_compose)->not->toContain('middlewares=redirect-to-https');
+});
+
+it('persists the redirect type for service applications', function () {
+    Livewire::test(Domains::class, ['service' => $this->service->fresh(['applications', 'server'])])
+        ->assertSet("permanentRedirects.{$this->apiApp->id}", false)
+        ->assertSee('Redirect type')
+        ->call('updatePermanentRedirect', $this->apiApp->id, true)
+        ->assertHasNoErrors();
+
+    expect($this->apiApp->fresh()->is_permanent_redirect_enabled)->toBeTrue()
+        ->and($this->service->fresh()->docker_compose)->toContain('middlewares=redirect-to-https-permanent');
 });
 
 it('hides the HTTP redirect control for HTTP-only service applications', function () {
