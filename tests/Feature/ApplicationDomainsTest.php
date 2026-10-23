@@ -669,6 +669,22 @@ it('shows the HTTP redirect control for HTTPS domains and persists changes', fun
     expect($this->application->settings->fresh()->is_force_https_enabled)->toBeFalse();
 });
 
+it('persists the redirect type and regenerates permanent redirect labels', function () {
+    $this->application->update(['fqdn' => 'https://app.example.com']);
+
+    Livewire::test(Domains::class, ['application' => $this->application->fresh()])
+        ->assertSet('isPermanentRedirectEnabled', false)
+        ->assertSee('Redirect type')
+        ->set('isPermanentRedirectEnabled', true)
+        ->call('updatePermanentRedirect')
+        ->assertHasNoErrors();
+
+    $application = $this->application->fresh();
+
+    expect($application->settings->is_permanent_redirect_enabled)->toBeTrue()
+        ->and(base64_decode($application->custom_labels))->toContain('middlewares=redirect-to-https-permanent');
+});
+
 it('hides the HTTP redirect control for HTTP-only domains', function () {
     $this->application->update(['fqdn' => 'http://app.example.com']);
 
@@ -2802,6 +2818,21 @@ it('does not prefill the default internal port when editing a domain without a p
         ->assertSet('domainRows.0.has_port_override', false)
         ->call('startEdit', 0)
         ->assertSet('editingDomainParts.port', '');
+});
+
+it('passes the inherited internal port to the domain settings modal', function () {
+    $this->application->update([
+        'ports_exposes' => '3000,8080',
+        'fqdn' => 'https://example.com:8080',
+    ]);
+
+    Livewire::test(Domains::class, ['application' => $this->application->fresh()])
+        ->assertSet('domainRows.0.internal_port', 8080)
+        ->assertSet('domainRows.0.inherited_port', 3000)
+        ->call('startEdit', 0)
+        ->assertSet('editingInheritedPort', 3000)
+        ->call('cancelEdit')
+        ->assertSet('editingInheritedPort', null);
 });
 
 it('clears a domain port override and shows the default internal port', function () {

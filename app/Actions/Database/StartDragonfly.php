@@ -130,7 +130,7 @@ class StartDragonfly
         }
 
         if ($this->database->destination->server->isLogDrainEnabled() && $this->database->isLogDrainEnabled()) {
-            $docker_compose['services'][$container_name]['logging'] = generate_fluentd_configuration();
+            $docker_compose['services'][$container_name]['logging'] = generate_log_drain_configuration($this->database->destination->server);
         }
 
         if (count($this->database->ports_mappings_array) > 0) {
@@ -268,6 +268,8 @@ class StartDragonfly
         if (! $this->hasEnvironmentVariable($environment_variables, 'REDIS_PASSWORD')) {
             $environment_variables->push("REDIS_PASSWORD={$this->database->dragonfly_password}");
         }
+
+        $this->addCoolifyEnvironmentVariables($environment_variables);
 
         return $environment_variables->all();
     }

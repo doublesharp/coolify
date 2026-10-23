@@ -7,6 +7,7 @@ use App\Enums\TrafficIpMode;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use OpenApi\Attributes as OA;
 
@@ -26,6 +27,7 @@ use OpenApi\Attributes as OA;
         'is_cloudflare_tunnel' => ['type' => 'boolean'],
         'is_jump_server' => ['type' => 'boolean'],
         'is_logdrain_axiom_enabled' => ['type' => 'boolean'],
+        'is_logdrain_cloudwatch_enabled' => ['type' => 'boolean'],
         'is_logdrain_custom_enabled' => ['type' => 'boolean'],
         'is_logdrain_highlight_enabled' => ['type' => 'boolean'],
         'is_logdrain_newrelic_enabled' => ['type' => 'boolean'],
@@ -38,6 +40,7 @@ use OpenApi\Attributes as OA;
         'is_geoip_enabled' => ['type' => 'boolean'],
         'geoip_refresh_days' => ['type' => 'integer'],
         'traffic_ip_mode' => ['type' => 'string', 'enum' => ['full', 'anonymized', 'off']],
+        'traefik_certificate_resolver' => ['type' => 'string', 'nullable' => true, 'description' => 'Traefik certificate resolver for generated HTTPS routers. Null when the proxy uses its own certificates.'],
         'is_reachable' => ['type' => 'boolean'],
         'is_sentinel_enabled' => ['type' => 'boolean'],
         'is_swarm_manager' => ['type' => 'boolean'],
@@ -46,6 +49,9 @@ use OpenApi\Attributes as OA;
         'is_usable' => ['type' => 'boolean'],
         'logdrain_axiom_api_key' => ['type' => 'string'],
         'logdrain_axiom_dataset_name' => ['type' => 'string'],
+        'logdrain_cloudwatch_region' => ['type' => 'string'],
+        'logdrain_cloudwatch_group' => ['type' => 'string'],
+        'logdrain_cloudwatch_stream_prefix' => ['type' => 'string'],
         'logdrain_custom_config' => ['type' => 'string'],
         'logdrain_custom_config_parser' => ['type' => 'string'],
         'logdrain_highlight_project_id' => ['type' => 'string'],
@@ -71,6 +77,16 @@ use OpenApi\Attributes as OA;
 )]
 class ServerSetting extends Model
 {
+    /**
+     * Allowed Traefik certificate resolver names; also keeps the value safe inside generated labels.
+     */
+    public const string TRAEFIK_CERTIFICATE_RESOLVER_PATTERN = '/^[A-Za-z0-9_-]+$/';
+
+    /**
+     * Resolver value that turns the resolver off (no certresolver label) on a resource or server.
+     */
+    public const string TRAEFIK_CERTIFICATE_RESOLVER_NONE = 'none';
+
     public const int DEFAULT_SENTINEL_METRICS_REFRESH_RATE_SECONDS = 10;
 
     public const int DEFAULT_SENTINEL_METRICS_HISTORY_DAYS = 7;
@@ -87,6 +103,9 @@ class ServerSetting extends Model
         'is_usable',
         'wildcard_domain',
         'is_cloudflare_tunnel',
+        'cloudflare_tunnel_id',
+        'cloudflare_tunnel_account_id',
+        'cloudflare_tunnel_integration_token_id',
         'is_logdrain_newrelic_enabled',
         'logdrain_newrelic_license_key',
         'logdrain_newrelic_base_uri',
@@ -99,6 +118,10 @@ class ServerSetting extends Model
         'is_logdrain_custom_enabled',
         'logdrain_custom_config',
         'logdrain_custom_config_parser',
+        'is_logdrain_cloudwatch_enabled',
+        'logdrain_cloudwatch_region',
+        'logdrain_cloudwatch_group',
+        'logdrain_cloudwatch_stream_prefix',
         'concurrent_builds',
         'dynamic_timeout',
         'force_disabled',
@@ -134,10 +157,17 @@ class ServerSetting extends Model
         'geoip_refresh_days',
         'geoip_maxmind_license_key',
         'traffic_ip_mode',
+        'traefik_certificate_resolver',
         'docker_version',
         'docker_version_checked_at',
         'compose_version',
         'compose_version_checked_at',
+        'patch_check_frequency',
+        'patch_check_result',
+        'patch_check_error',
+        'patch_checked_at',
+        'is_auto_security_updates_enabled',
+        'auto_security_updates_time',
     ];
 
     /**
@@ -170,11 +200,16 @@ class ServerSetting extends Model
         'is_geoip_enabled' => 'boolean',
         'geoip_refresh_days' => 'integer',
         'geoip_maxmind_license_key' => 'encrypted',
+        'logdrain_custom_config' => 'encrypted',
         'traffic_ip_mode' => TrafficIpMode::class,
         'docker_version_checked_at' => 'datetime',
         'compose_version_checked_at' => 'datetime',
         'backup_compression_cpu_percentage' => 'integer',
         'server_disk_usage_notification_interval_hours' => 'integer',
+        'patch_check_result' => 'array',
+        'patch_checked_at' => 'datetime',
+        'is_auto_security_updates_enabled' => 'boolean',
+        'is_logdrain_cloudwatch_enabled' => 'boolean',
     ];
 
     /**
@@ -307,7 +342,9 @@ class ServerSetting extends Model
     {
         $url = $this->sentinel_custom_url;
 
-        if ($this->server->isLocalhost() && $url === 'http://host.docker.internal:8000') {
+        // The local Sentinel runs on the coolify network. A host gateway URL leaves that network
+        // through the host INPUT chain, where host firewalls such as UFW drop it.
+        if ($this->server->isLocalhost() && strtolower((string) parse_url((string) $url, PHP_URL_HOST)) === 'host.docker.internal') {
             $url = null;
         }
 
@@ -423,5 +460,28 @@ class ServerSetting extends Model
                 return translate_cron_expression($value);
             }
         );
+    }
+
+    /**
+     * Summary of the saved patch check, or null when the server was never checked.
+     * Results saved before security and reboot detection count as 0 and false.
+     *
+     * @return array{updates: int, security: int, reboot_required: bool, error: ?string, checked_at: Carbon}|null
+     */
+    public function patchStatus(): ?array
+    {
+        if ($this->patch_checked_at === null) {
+            return null;
+        }
+
+        $result = $this->patch_check_result ?? [];
+
+        return [
+            'updates' => (int) ($result['total_updates'] ?? 0),
+            'security' => (int) ($result['security_updates'] ?? 0),
+            'reboot_required' => ($result['reboot_required'] ?? null) === true,
+            'error' => filled($this->patch_check_error) ? $this->patch_check_error : null,
+            'checked_at' => $this->patch_checked_at,
+        ];
     }
 }

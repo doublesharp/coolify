@@ -7,6 +7,7 @@ use App\Actions\Server\ValidateServer;
 use App\Enums\ProxyStatus;
 use App\Enums\ProxyTypes;
 use App\Enums\ServerRole;
+use App\Http\Controllers\Api\Concerns\RequiresDeployAbility;
 use App\Http\Controllers\Controller;
 use App\Jobs\DeleteResourceJob;
 use App\Jobs\ValidateAndInstallServerJob;
@@ -17,6 +18,7 @@ use App\Models\Project;
 use App\Models\Server as ModelsServer;
 use App\Models\Team;
 use App\Rules\ValidServerIp;
+use App\Services\ServerTransfer\ServerTransferClaimer;
 use App\Support\ValidationPatterns;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -27,6 +29,13 @@ use Stringable;
 
 class ServersController extends Controller
 {
+    use RequiresDeployAbility;
+
+    /**
+     * The server name goes into one-line config files on the server (for example the log drain config), so it must not contain control characters such as new lines.
+     */
+    private const SERVER_NAME_CONTROL_CHARACTERS_PATTERN = '/[\x00-\x1F\x7F]/';
+
     private function removeSensitiveDataFromSettings($settings)
     {
         if (request()->attributes->get('can_read_sensitive', false) === true) {
@@ -459,7 +468,7 @@ class ServersController extends Controller
                 schema: new OA\Schema(
                     type: 'object',
                     properties: [
-                        'name' => ['type' => 'string', 'example' => 'My Server', 'description' => 'The name of the server.'],
+                        'name' => ['type' => 'string', 'example' => 'My Server', 'description' => 'The name of the server. Must not contain control characters such as new lines.'],
                         'description' => ['type' => 'string', 'example' => 'My Server Description', 'description' => 'The description of the server.'],
                         'ip' => ['type' => 'string', 'example' => '127.0.0.1', 'description' => 'The IP of the server.'],
                         'port' => ['type' => 'integer', 'example' => 22, 'description' => 'The port of the server.'],
@@ -521,7 +530,7 @@ class ServersController extends Controller
             return $return;
         }
         $validator = customApiValidator($request->all(), [
-            'name' => 'string|max:255',
+            'name' => ['string', 'max:255', 'not_regex:'.self::SERVER_NAME_CONTROL_CHARACTERS_PATTERN],
             'description' => 'string|nullable',
             'ip' => ['string', 'required', new ValidServerIp],
             'port' => 'integer|nullable|between:1,65535',
@@ -533,6 +542,7 @@ class ServersController extends Controller
             'proxy_type' => 'string|nullable',
         ], [
             ...ValidationPatterns::serverUsernameMessages(),
+            'name.not_regex' => 'The name must not contain control characters such as new lines.',
         ]);
 
         $extraFields = array_diff(array_keys($request->all()), $allowedFields);
@@ -593,6 +603,9 @@ class ServersController extends Controller
         if ($foundServer) {
             return response()->json(['message' => 'A server with this IP/Domain is already in use.'], 400);
         }
+        if ($request->instant_validate) {
+            ModelsServer::throttleValidation($teamId, $request->ip);
+        }
 
         $proxyType = $request->proxy_type ? str($request->proxy_type)->upper() : ProxyTypes::TRAEFIK->value;
 
@@ -636,7 +649,7 @@ class ServersController extends Controller
 
     #[OA\Patch(
         summary: 'Update',
-        description: 'Update Server.',
+        description: 'Update Server. Changing proxy_type needs a token with the write and deploy permissions.',
         path: '/servers/{uuid}',
         operationId: 'update-server-by-uuid',
         security: [
@@ -654,7 +667,7 @@ class ServersController extends Controller
                 schema: new OA\Schema(
                     type: 'object',
                     properties: [
-                        'name' => ['type' => 'string', 'description' => 'The name of the server.'],
+                        'name' => ['type' => 'string', 'description' => 'The name of the server. Must not contain control characters such as new lines.'],
                         'description' => ['type' => 'string', 'description' => 'The description of the server.'],
                         'ip' => ['type' => 'string', 'description' => 'The IP of the server.'],
                         'port' => ['type' => 'integer', 'description' => 'The port of the server.'],
@@ -663,7 +676,7 @@ class ServersController extends Controller
                         'server_role' => ['type' => 'string', 'enum' => ['deployment', 'build', 'both'], 'description' => 'Server role.'],
                         'is_build_server' => ['type' => 'boolean', 'deprecated' => true, 'description' => 'Deprecated: use server_role instead. true sets server_role to build, false changes a build server to both and leaves other roles unchanged. Must not conflict with server_role.'],
                         'instant_validate' => ['type' => 'boolean', 'description' => 'Instant validate.'],
-                        'proxy_type' => ['type' => 'string', 'enum' => ['traefik', 'caddy', 'none'], 'description' => 'The proxy type.'],
+                        'proxy_type' => ['type' => 'string', 'enum' => ['traefik', 'caddy', 'none'], 'description' => 'The proxy type. Changing it starts the new proxy on the server and needs the deploy permission.'],
                         'concurrent_builds' => ['type' => 'integer', 'description' => 'Number of concurrent builds.'],
                         'dynamic_timeout' => ['type' => 'integer', 'description' => 'Deployment timeout in seconds.'],
                         'deployment_queue_limit' => ['type' => 'integer', 'description' => 'Maximum number of queued deployments.'],
@@ -676,6 +689,7 @@ class ServersController extends Controller
             ),
         ),
         responses: [
+            new OA\Response(response: 403, description: 'The token needs the deploy permission to change the proxy type.'),
             new OA\Response(
                 response: 201,
                 description: 'Server updated.',
@@ -719,7 +733,7 @@ class ServersController extends Controller
             return $return;
         }
         $validator = customApiValidator($request->all(), [
-            'name' => 'string|max:255|nullable',
+            'name' => ['string', 'max:255', 'nullable', 'not_regex:'.self::SERVER_NAME_CONTROL_CHARACTERS_PATTERN],
             'description' => 'string|nullable',
             'ip' => ['string', 'nullable', new ValidServerIp],
             'port' => 'integer|nullable|between:1,65535',
@@ -739,6 +753,7 @@ class ServersController extends Controller
             'is_terminal_enabled' => 'boolean|nullable',
         ], [
             ...ValidationPatterns::serverUsernameMessages(),
+            'name.not_regex' => 'The name must not contain control characters such as new lines.',
         ]);
 
         $extraFields = array_diff(array_keys($request->all()), $allowedFields);
@@ -760,6 +775,9 @@ class ServersController extends Controller
             return response()->json(['message' => 'Server not found.'], 404);
         }
         $this->authorize('update', $server);
+        if ($request->instant_validate) {
+            ModelsServer::throttleValidation($teamId, $request->ip ?? $server->ip);
+        }
         if ($request->proxy_type) {
             $validProxyTypes = collect(ProxyTypes::cases())->map(function ($proxyType) {
                 return str($proxyType->value)->lower();
@@ -822,6 +840,11 @@ class ServersController extends Controller
             ], 422);
         }
 
+        $proxyTypeChanged = $request->proxy_type && ! str($request->proxy_type)->lower()->exactly(str($server->proxyType())->lower());
+        if ($proxyTypeChanged && ($response = $this->deployAbilityForbiddenResponse($request, 'Changing the proxy type starts the new proxy on the server, so it needs a token with the deploy permission.'))) {
+            return $response;
+        }
+
         $server->update($updateFields);
         if ($serverRole !== null) {
             $server->settings()->update([
@@ -841,7 +864,7 @@ class ServersController extends Controller
             $server->settings()->update(array_filter($advancedSettings, fn ($value) => ! is_null($value)));
         }
 
-        if ($request->proxy_type) {
+        if ($proxyTypeChanged) {
             $server->changeProxy($request->proxy_type, async: true);
         }
 
@@ -863,7 +886,7 @@ class ServersController extends Controller
 
     #[OA\Delete(
         summary: 'Delete',
-        description: 'Delete server by UUID.',
+        description: 'Delete server by UUID. With force or delete_from_provider, needs a token with the write and deploy permissions.',
         path: '/servers/{uuid}',
         operationId: 'delete-server-by-uuid',
         security: [
@@ -883,19 +906,20 @@ class ServersController extends Controller
             new OA\Parameter(
                 name: 'force',
                 in: 'query',
-                description: 'Also delete all resources on the server.',
+                description: 'Also delete all resources on the server. Needs the deploy permission.',
                 required: false,
                 schema: new OA\Schema(type: 'boolean', default: false)
             ),
             new OA\Parameter(
                 name: 'delete_from_provider',
                 in: 'query',
-                description: 'Also delete the server from its cloud provider (Hetzner, Vultr or DigitalOcean). This cannot be undone.',
+                description: 'Also delete the server from its cloud provider (Hetzner, Vultr or DigitalOcean). This cannot be undone. Needs the deploy permission.',
                 required: false,
                 schema: new OA\Schema(type: 'boolean', default: false)
             ),
         ],
         responses: [
+            new OA\Response(response: 403, description: 'The token needs the deploy permission to delete the resources or the cloud server.'),
             new OA\Response(
                 response: 200,
                 description: 'Server deleted.',
@@ -946,6 +970,21 @@ class ServersController extends Controller
         $this->authorize('delete', $server);
 
         $force = filter_var($request->query('force', false), FILTER_VALIDATE_BOOLEAN);
+        $deleteFromProvider = filter_var($request->query('delete_from_provider', false), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        if (is_null($deleteFromProvider)) {
+            return response()->json(['message' => 'delete_from_provider must be a boolean.'], 422);
+        }
+        // Another Coolify instance manages a transferred server. This instance deletes only its own records:
+        // never the cloud server, the containers, or the DNS records that the other instance uses.
+        if ($server->isTransferredAway()) {
+            if ($deleteFromProvider) {
+                return response()->json(['message' => 'This server is managed by another Coolify instance. Delete its cloud server from that instance.'], 422);
+            }
+            app(ServerTransferClaimer::class)->deleteArchive($server);
+            auditLog('api.server.deleted', ['team_id' => $teamId, 'server_uuid' => $server->uuid, 'server_name' => $server->name, 'ip' => $server->ip, 'archive' => true]);
+
+            return response()->json(['message' => 'Server deleted.']);
+        }
 
         if ($server->definedResources()->count() > 0 && ! $force) {
             return response()->json(['message' => 'Server has resources. Use ?force=true to delete all resources and the server, or delete resources manually first.'], 400);
@@ -954,10 +993,6 @@ class ServersController extends Controller
             return response()->json(['message' => 'Local server cannot be deleted.'], 400);
         }
 
-        $deleteFromProvider = filter_var($request->query('delete_from_provider', false), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
-        if (is_null($deleteFromProvider)) {
-            return response()->json(['message' => 'delete_from_provider must be a boolean.'], 422);
-        }
         if ($deleteFromProvider) {
             $linkedProviders = array_keys(array_filter([
                 'hetzner' => $server->hetzner_server_id,
@@ -972,6 +1007,10 @@ class ServersController extends Controller
                     return response()->json(['message' => "No {$provider} token found for this team. Add one before deleting the server from the cloud provider."], 422);
                 }
             }
+        }
+
+        if (($force || $deleteFromProvider) && ($response = $this->deployAbilityForbiddenResponse($request, 'Deleting the resources or the cloud server needs a token with the deploy permission.'))) {
+            return $response;
         }
 
         if ($force) {
@@ -1010,7 +1049,7 @@ class ServersController extends Controller
 
     #[OA\Post(
         summary: 'Validate',
-        description: 'Validate server by UUID.',
+        description: 'Validate server by UUID. With install=true, needs a token with the write and deploy permissions.',
         path: '/servers/{uuid}/validate',
         operationId: 'validate-server-by-uuid',
         security: [
@@ -1026,7 +1065,7 @@ class ServersController extends Controller
                 properties: [
                     new OA\Property(
                         property: 'install',
-                        description: 'Install missing prerequisites and Docker. This can restart the Docker daemon.',
+                        description: 'Install missing prerequisites and Docker, then start the proxy. This can restart the Docker daemon. Needs the deploy permission.',
                         type: 'boolean',
                         default: false,
                     ),
@@ -1034,6 +1073,7 @@ class ServersController extends Controller
             ),
         ),
         responses: [
+            new OA\Response(response: 403, description: 'The token needs the deploy permission to install the server.'),
             new OA\Response(
                 response: 201,
                 description: 'Server validation started.',
@@ -1100,6 +1140,10 @@ class ServersController extends Controller
         }
 
         $install = $request->boolean('install', false);
+        if ($install && ($response = $this->deployAbilityForbiddenResponse($request, 'Installing the server runs commands on it and starts the proxy, so it needs a token with the deploy permission.'))) {
+            return $response;
+        }
+        ModelsServer::throttleValidation($teamId, $server->ip);
         if ($install) {
             ValidateAndInstallServerJob::dispatch($server);
         } else {

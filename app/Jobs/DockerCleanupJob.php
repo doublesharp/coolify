@@ -41,6 +41,8 @@ class DockerCleanupJob implements ShouldBeEncrypted, ShouldQueue
 
     public ?DockerCleanupExecution $execution_log = null;
 
+    public const INTERRUPTED_MESSAGE = 'Docker cleanup was interrupted: its worker stopped before the cleanup finished.';
+
     /**
      * Shares the per-server lock with queued CleanupDocker runs, so two cleanups never run on
      * one server at once. A scheduled run that finds the lock held marks its occurrence
@@ -187,14 +189,15 @@ class DockerCleanupJob implements ShouldBeEncrypted, ShouldQueue
             }
         } catch (\Throwable $e) {
             $failed = true;
+            $errorMessage = remove_iip($e->getMessage());
             if ($this->execution_log) {
                 $this->execution_log->update([
                     'status' => 'failed',
-                    'message' => $e->getMessage(),
+                    'message' => $errorMessage,
                 ]);
                 event(new DockerCleanupDone($this->execution_log));
             }
-            $this->server->team?->notify(new DockerCleanupFailed($this->server, 'Docker cleanup job failed with the following error: '.$e->getMessage()));
+            $this->server->team?->notify(new DockerCleanupFailed($this->server, 'Docker cleanup job failed with the following error: '.$errorMessage));
             throw $e;
         } finally {
             if (! $failed && $this->occurrenceUuid) {
@@ -231,6 +234,40 @@ class DockerCleanupJob implements ShouldBeEncrypted, ShouldQueue
         return $jobUuid ? 'docker-cleanup-execution:'.$jobUuid : null;
     }
 
+    /**
+     * Fails running executions that are older than the server lock. The worker kills a cleanup at the
+     * job timeout, which is shorter than the lock, so such a run lost its worker before failed() ran
+     * (for example a killed container) and would otherwise stay running.
+     */
+    public static function failInterruptedExecutions(): void
+    {
+        $executions = DockerCleanupExecution::query()
+            ->with('server.team')
+            ->where('status', 'running')
+            ->whereNull('finished_at')
+            ->where('created_at', '<', now()->subSeconds(CleanupDocker::overlapLockExpiresAfter()))
+            ->get();
+
+        foreach ($executions as $execution) {
+            $updated = DockerCleanupExecution::query()
+                ->whereKey($execution->id)
+                ->where('status', 'running')
+                ->whereNull('finished_at')
+                ->update([
+                    'status' => 'failed',
+                    'message' => self::INTERRUPTED_MESSAGE,
+                    'finished_at' => Carbon::now()->toImmutable(),
+                ]);
+
+            if ($updated === 0) {
+                continue;
+            }
+
+            event(new DockerCleanupDone($execution->refresh()));
+            $execution->server?->team?->notify(new DockerCleanupFailed($execution->server, 'Docker cleanup job failed with the following error: '.self::INTERRUPTED_MESSAGE));
+        }
+    }
+
     public function failed(?\Throwable $exception): void
     {
         if ($this->occurrenceUuid) {
@@ -246,7 +283,7 @@ class DockerCleanupJob implements ShouldBeEncrypted, ShouldQueue
             return;
         }
 
-        $message = $exception?->getMessage() ?? 'Docker cleanup job failed without an exception.';
+        $message = remove_iip($exception?->getMessage() ?? 'Docker cleanup job failed without an exception.');
 
         $updated = DockerCleanupExecution::query()
             ->whereKey($execution->id)
