@@ -143,7 +143,7 @@ function runStartSentinelAndCaptureScript(Server $server, string $clientVersion 
     Event::fake([SentinelRestarted::class]);
     $scripts = [];
     Process::fake(function ($process) use (&$scripts, $clientVersion) {
-        $scripts[] = is_array($process->command) ? implode(' ', $process->command) : $process->command;
+        $scripts[] = is_array(remoteProcessScript($process)) ? implode(' ', remoteProcessScript($process)) : remoteProcessScript($process);
 
         return Process::result(output: str_contains(end($scripts), '{{.Client.Version}}') ? $clientVersion : '');
     });

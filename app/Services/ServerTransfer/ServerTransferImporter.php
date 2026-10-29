@@ -181,7 +181,11 @@ class ServerTransferImporter
         bool $preserveUuids = true,
         bool $adoptMode = true,
     ): array {
-        ServerTransferBundle::assertValid($bundle);
+        // Checks every id, list size, and imported value before anything is written.
+        $validation = ServerTransferBundle::validate($bundle);
+        if (! $validation['valid']) {
+            throw ValidationException::withMessages(['bundle' => $validation['errors']]);
+        }
         $this->assertValidServerPayload((array) data_get($bundle, 'server', []));
 
         if ($adoptMode && ! $preserveUuids) {
@@ -190,7 +194,6 @@ class ServerTransferImporter
             ]);
         }
 
-        $validation = ServerTransferBundle::validate($bundle);
         $warnings = $validation['warnings'];
         if (is_array(data_get($bundle, 'warnings'))) {
             $warnings = array_values(array_unique(array_merge($warnings, $bundle['warnings'])));
@@ -206,6 +209,8 @@ class ServerTransferImporter
 
         if (! $dryRun) {
             $this->assertCanImport($serverUuid, $serverIp, $teamId, $preserveUuids);
+            // The import validates the server over SSH, so it uses the same Cloud limit as a new server.
+            Server::throttleValidation($teamId, $serverIp);
         }
 
         if ($uuidConflict) {
@@ -502,14 +507,14 @@ class ServerTransferImporter
     {
         $team = Team::find($teamId);
         $archive = $preserveUuids ? $this->replaceableArchive($serverUuid, $teamId) : null;
-        // The archive is replaced, so the import does not add a server.
-        $limitReached = ! $team || ($archive === null && Team::serverLimitReached($team));
+        // An archive does not use a server slot, so replacing it also needs a free slot.
+        $limitReached = ! $team || Team::serverLimitReached($team);
 
         $existingServer = $preserveUuids && $archive === null ? Server::withTrashed()->where('uuid', $serverUuid)->first() : null;
         $uuidMessage = match (true) {
             $existingServer === null => null,
             $existingServer->trashed() => "The server with UUID {$serverUuid} is still being deleted on this instance. Wait a minute, then transfer again.",
-            $existingServer->isTransferredAway() => "Another team of this instance has the archived copy of server {$existingServer->name}. Transfer the server into that team, or delete the archive there first.",
+            $existingServer->isTransferredAway() => 'Another team of this instance has the archived copy of this server. Transfer the server into that team, or delete the archive there first.',
             default => "A server with UUID {$serverUuid} already exists on this instance. Delete/transfer it first, or import with preserve_uuids=false.",
         };
 
@@ -590,7 +595,7 @@ class ServerTransferImporter
 
         if ($adoptMode) {
             throw ValidationException::withMessages([
-                'bundle' => ["The {$label} UUID {$uuid} is already used on this instance. Delete that {$label} permanently first, because adopt mode needs the same UUID to keep the running containers."],
+                'bundle' => ["The {$label} UUID {$uuid} cannot be used on this instance. Adopt mode needs the same UUID to keep the running containers. If you deleted the {$label} on this instance, delete it permanently first."],
             ]);
         }
 
@@ -2004,6 +2009,7 @@ class ServerTransferImporter
             'secret' => data_get($payload, 'secret'),
             'bucket' => data_get($payload, 'bucket'),
             'endpoint' => data_get($payload, 'endpoint'),
+            'use_path_style_endpoint' => (bool) data_get($payload, 'use_path_style_endpoint', true),
             'is_usable' => (bool) data_get($payload, 'is_usable', true),
         ]);
         $storage->uuid = $uuid;
@@ -2273,7 +2279,7 @@ class ServerTransferImporter
             $preview = ApplicationPreview::withTrashed()->where('uuid', $uuid)->first();
             if ($preview && ! $this->previewBelongsToTeam($preview, $teamId)) {
                 throw ValidationException::withMessages([
-                    'previews' => ['An imported preview UUID conflicts with a preview outside the target team.'],
+                    'previews' => ['An imported preview UUID cannot be used on this instance.'],
                 ]);
             }
             if (! $preview) {
@@ -2329,6 +2335,7 @@ class ServerTransferImporter
                 'docker_registry_image_tag' => data_get($previewPayload, 'docker_registry_image_tag'),
                 'domain_port_overrides' => data_get($previewPayload, 'domain_port_overrides'),
                 'max_restart_count' => (int) data_get($previewPayload, 'max_restart_count', 0),
+                'keeps_production_values' => (bool) data_get($previewPayload, 'keeps_production_values', false),
             ];
 
             if ($preview) {

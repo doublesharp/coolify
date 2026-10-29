@@ -42,7 +42,7 @@ When you add a model or a setting to the transfer, add it to this file too.
 | ✅ | Metrics / Sentinel | metrics on, refresh rate 10 s, history 14 days, push interval 30 s |
 | ✅ | Traffic analytics | on, top N 20, sample threshold, retention 1h=3 / 1d=60 days, IP mode `anonymized` |
 | ✅ | GeoIP | on, MaxMind license key, refresh 14 days |
-| ✅ | Log drains | New Relic (key + base URI), Highlight (project ID), Axiom (dataset + key), custom (config + parser), one of them enabled |
+| ✅ | Log drains | New Relic (key + base URI), Axiom (dataset, key + edge domain), custom (config + parser), one of them enabled |
 | ✅ | Cloudflare tunnel | tunnel on, tunnel ID, account ID, Cloudflare integration token selected, and the DNS record of the SSH hostname. Expected: the record moves with the server; the source keeps it only for a take back (not owned) |
 | ➕ | Jump server flag | on (on a server that is only a jump host) |
 
@@ -96,14 +96,14 @@ When you add a model or a setting to the transfer, add it to this file too.
 | ✅ | Limits | memory, swap, swappiness, reservation, CPUs, cpuset, CPU shares |
 | ➕ | Advanced | custom labels, custom docker run options, pre/post deployment command + container, manual webhook secrets |
 | ✅ | Maintenance | maintenance mode on + custom maintenance page |
-| ✅ | All application settings that are not the default | git submodules, LFS, shallow clone, auto deploy off, force HTTPS, debug, preview deployments on, PR deployments public, log drain, GPU (driver, count, device IDs, options), include timestamps, swarm-only worker nodes, build server, consistent container name, gzip off, strip prefix off, connect to Docker network, custom internal name, container label escape off, env sorting, read-only labels, preserve repository, disable build cache, use build secrets, stop grace period 30, inject build args off, include source commit, Docker images to keep 5, custom container name prefix, redact env values in logs, Coolify default variables off, Traefik certificate resolver |
+| ✅ | All application settings that are not the default | git submodules, LFS, shallow clone, auto deploy off, force HTTPS, debug, preview deployments on, PR deployments public, log drain, GPU (driver, count, device IDs, options), include timestamps, swarm-only worker nodes, build server, consistent container name, gzip off, strip prefix off, connect to Docker network, custom internal name, container label escape off, env sorting, read-only labels, preserve repository, disable build cache, use build secrets, stop grace period 30, rolling update drain time 12, inject build args off, include source commit, Docker images to keep 5, custom container name prefix, redact env values in logs, Coolify default variables off, Traefik certificate resolver |
 | ✅ | Environment variables | normal, multiline, literal, shown once, build time only, runtime only, required, with comment, preview-only, and references to `{{team.*}}`, `{{project.*}}`, `{{environment.*}}`, `{{server.*}}` |
 | ✅ | Persistent volume | the seed has one; add a host-path bind mount and preview suffix on |
 | ✅ | File mount + directory mount | content, chown, chmod |
 | ✅ | Volume backup | on the persistent volume: S3 on, stop during backup, all retention values, timeout, missing-backup days |
 | ✅ | Scheduled tasks | the seed has one; add a disabled one with container + timeout |
 | ✅ | Tag | |
-| ✅ | Preview deployment | PR preview with domain port overrides + max restart count (needs the GitHub App, or create it in the database) |
+| ✅ | Preview deployment | PR preview with domain port overrides + max restart count + keeps production values (previews from before v4.5.1) (needs the GitHub App, or create it in the database) |
 | ✅ | Secret manager link | the app loads variables from the secret manager token |
 | ✅ | Managed DNS record | owned record in the Cloudflare zone for the app domain. Expected: the target takes ownership (provider comment changes) |
 

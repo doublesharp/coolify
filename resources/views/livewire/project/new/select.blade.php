@@ -1,6 +1,6 @@
 <div class="application-settings-form" x-data x-init="$wire.loadServers">
-    <div x-data="searchResources()">
-        @if ($current_step === 'type')
+    @if ($current_step === 'type')
+        <div x-data="searchResources()">
             <x-application.settings-section title="Choose a resource" flush>
                 <x-slot:actions>
                     <button type="button" class="button" :disabled="loading" @click="loadResources">
@@ -634,8 +634,8 @@
                     }
                 }
             </script>
-        @endif
-    </div>
+        </div>
+    @endif
     @if ($current_step === 'servers')
         <x-application.settings-section title="Select a server"
             description="Choose the machine that will host this resource." flush>
@@ -648,7 +648,7 @@
             @endif
             <div class="divide-y divide-neutral-200 dark:divide-white/[0.07]">
                 @forelse($servers as $server)
-                    <button type="button" wire:click="setServer({{ $server }})"
+                    <button type="button" wire:click="setServer({{ $server->id }})"
                         class="group flex min-h-14 w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-neutral-50 dark:hover:bg-white/[0.025]">
                         <span
                             class="flex size-8 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-white/[0.08] dark:bg-white/[0.035] dark:text-fg-dim">
