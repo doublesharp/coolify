@@ -49,8 +49,8 @@ use Tests\TestCase;
 uses(TestCase::class, RefreshDatabase::class);
 
 beforeEach(function () {
-    // A claim writes the owner marker on the host over SSH.
-    Process::fake();
+    // Claims rotate Sentinel credentials and probe Docker before writing the owner marker.
+    fakeRemoteProcesses(['*{{.Client.Version}}*' => Process::result(output: '29.9.2')]);
     Storage::fake('ssh-keys');
     // An import validates the claimed server over SSH; the sync test queue would run it.
     Queue::fake([ValidateAndInstallServerJob::class]);
@@ -1993,6 +1993,7 @@ test('a claimed import starts the finish list and returns the server URL', funct
     $result = $this->importer->import($bundle, teamId: $this->team->id);
 
     $server = Server::where('uuid', $result['server_uuid'])->firstOrFail();
+    expect($result['warnings'])->toBe([]);
     expect($result['server_url'])->toBe('https://coolify-a.test/server/'.$server->uuid)
         ->and(data_get($server->server_metadata, 'transfer.status'))->toBe('claimed')
         ->and(collect(data_get($server->server_metadata, 'transfer.finish.items'))->pluck('key'))->toContain('server_connection:server');
