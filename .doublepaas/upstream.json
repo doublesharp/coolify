@@ -1,5 +1,5 @@
 {
-  "tag": "v4.5.0",
-  "commit": "5ca69705d681da46028ea15a8a39d90a4ebcce89",
-  "image": "docker.io/coollabsio/coolify:4.5.0@sha256:d96931bef961ab5c173edfca190e03d4b77e93dee622da780ddfa22cfa2b77cf"
+  "tag": "v4.5.3",
+  "commit": "70c1bcb1381de7d42fd290e6cd50bf9a5bcf714d",
+  "image": "docker.io/coollabsio/coolify:4.5.3@sha256:e4e662978b1ea86b9711149caa2e46497bf8f2c03f578c45324d33e42914ff61"
 }

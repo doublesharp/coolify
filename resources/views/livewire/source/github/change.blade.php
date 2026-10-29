@@ -47,13 +47,13 @@
         @if ($showSettingsSidebar)
             <section class="application-settings-workspace mt-4 w-full max-w-none lg:mt-0">
                 <div class="grid min-w-0 gap-8 xl:grid-cols-[210px_minmax(0,1fr)] xl:gap-8">
-                    <x-main-nav-menu back-label="Sources" back-title="Back to Integrations" :name="$github_app->name ?: 'GitHub App'"
+                    <x-main-nav-menu back-label="Sources" back-title="Back to Integrations"
                         data-settings-search-items="{{ json_encode(settingsSearchItems(['GitHub App' => $settingsMenuItems], $githubAppRouteParameters)) }}">
                         <nav aria-label="GitHub App settings"
-                            class="grid grid-cols-2 gap-0.5 border-y border-neutral-200 py-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-1 xl:border-y-0 xl:py-0 dark:border-white/[0.06]">
+                            class="grid grid-cols-1 gap-0.5">
                             @foreach ($settingsMenuItems as $menuItem)
                                 @if ($menuItem['label'] === 'Danger Zone')
-                                    <div class="col-span-full my-2 hidden border-t border-neutral-200 xl:block dark:border-white/[0.06]" aria-hidden="true"></div>
+                                    <div class="col-span-full my-2 border-t border-neutral-200 dark:border-white/[0.06]" aria-hidden="true"></div>
                                 @endif
                                 <a wire:key="github-app-settings-{{ str($menuItem['label'])->slug() }}"
                                     @class([

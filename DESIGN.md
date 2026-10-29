@@ -36,8 +36,9 @@ change.
   pure neutral gray.
 - **One accent.** Coolify purple in both themes (`#6b16ed`, hover `#7317ff`,
   pressed `#5a12c7`, depth `#4a0fa3`, light text and icons `#a391ff`). Yellow
-  is only for real warnings. The dark sidebar, including the logo cell, is
-  purple-black (`#120e1a`) with a faint brand wash. The dark command palette
+  is only for real warnings. In the default dark theme the sidebar, including
+  the logo cell, is purple-black (`#120e1a`) with a faint brand wash. Users
+  who want a neutral sidebar can pick a custom theme. The dark command palette
   has a light purple tint. The page canvas stays neutral.
 - **Quiet text.** Sentence case. A clear text ladder: primary, dim, faint.
   No em dashes in UI copy.
@@ -144,8 +145,8 @@ Rules for the tokens:
   `--ui-menu-bg`, never a translucent value, or the content behind shows
   through.
 - Keep the page canvas, cards, menus, and logs pure neutral (chroma 0). The
-  dark sidebar, the logo cell above it, and the dark command palette are the
-  tinted surfaces.
+  default dark sidebar, the logo cell above it, and the dark command palette
+  are the tinted surfaces.
 - **Dark lightness level.** The canvas is at 14.48% and the header panel at
   19.13%. To
   change the level, move every dark surface and border token by the same
@@ -154,6 +155,29 @@ Rules for the tokens:
   hover fill can become darker than its menu.
 - Primary buttons, focus rings, and active navigation use purple in both
   themes. Warning yellow is not an accent.
+- Do not hard-code the brand purple (`#6b16ed`, `rgb(107 22 237 / …)`,
+  `rgb(163 145 255 / …)`, `#8a4dff`), the dark canvas (`#0a0a0a`), or the
+  card color (`#121212`) in component CSS. Use the tokens: `--color-brand`,
+  `-hover`, `-press`, `-depth`, `-light`, `-ring`, `-foreground`,
+  `--color-sidebar`, `--color-app`, and `--color-card`. For a translucent tint, use
+  `color-mix(in srgb, var(--color-brand) 14%, transparent)`. A custom theme
+  (`html[data-theme="custom"]`) overrides only these tokens, so a hard-coded
+  value stays purple when the user picks another color.
+- The custom theme has four colors: Sidebar, Selected (the current page in
+  the sidebar), Accent, and Background. The accent gives the brand fill and its
+  hover, press, depth, and ring shades, and `--color-brand-foreground` (the
+  computed `--theme-accent-foreground`, so text stays readable on a light color
+  such as yellow). The surface, border, and text tokens come from one ladder
+  in `app.css` that mixes the readable text color into the background. The
+  sidebar uses the same ladder with the sidebar color, and it can have the
+  other light/dark scheme than the page (`data-sidebar-scheme`; `dark:`
+  utilities follow it). When you add a color token, give it a value in that
+  ladder.
+- A translucent fill on a control that sits directly on the page (not in a
+  card or table) shows the floating-navigation dots through it. Mix the tint
+  with the canvas instead:
+  `color-mix(in srgb, var(--color-brand) 6%, var(--color-app))`. Controls in
+  cards keep the translucent tint, so they blend with the card.
 
 ## P3. Scales
 
@@ -197,14 +221,15 @@ Class names below are examples. Keep the values and structure.
   well is `--ui-panel` (`#121212`). Tables use the same pair: the darker mix
   for the header row and `--ui-panel` for the rows.
 - In light mode the sidebar is the canvas color and has a 1px
-  `--ui-chrome-border` right edge. In dark mode the sidebar column, including
-  the logo cell, is `#120e1a` with a faint lavender right edge
-  (`rgb(163 145 255 / 0.10)`). The nav has a brand-purple wash that starts at
-  9% and fades out; the logo cell has a flat 9% wash, so the two read as one
-  surface.
+  `--ui-chrome-border` right edge. In the default dark theme the sidebar
+  column, including the logo cell, is `#120e1a` with a faint lavender right
+  edge (`rgb(163 145 255 / 0.10)`). The nav has a brand-purple wash that
+  starts at 9% and fades out; the logo cell has a flat 9% wash, so the two
+  read as one surface. A custom theme gets the neutral sidebar rules and its
+  own sidebar color.
 - The top bar matches the canvas. It has no bottom border at rest. After the
-  page scrolls under it, dark mode draws a lavender hairline
-  (`rgb(163 145 255 / 0.12)`), a translucent bar, blur, and a soft shadow.
+  page scrolls under it, dark mode draws a neutral hairline
+  (`rgb(255 255 255 / 0.06)`), a translucent bar, blur, and a soft shadow.
   The logo cell stays the solid sidebar color.
 - Keep the chrome borders faint. A strong border on near-black looks like a
   line drawn on the page.
@@ -259,9 +284,9 @@ Class names below are examples. Keep the values and structure.
     transition: transform 80ms, box-shadow 80ms, border-color 120ms, background-color 120ms;
 }
 .dark .nav-tile {
-    border-color: rgb(163 145 255 / 0.13);
-    background: rgb(107 22 237 / 0.07);
-    color: #b9adff;
+    border-color: rgb(255 255 255 / 0.07);
+    background: rgb(255 255 255 / 0.03);
+    color: oklch(72% 0 0);
 }
 .nav-item:hover .nav-tile { transform: translateY(-1px); box-shadow: 0 3px 0 var(--ui-depth-color); }
 .nav-item:active .nav-tile { transform: translateY(2px); box-shadow: none; }
@@ -279,18 +304,15 @@ Class names below are examples. Keep the values and structure.
 - Rows with a submenu end in a 12px chevron. In dark mode the chevron is
   hidden until the row is hovered, focused, or current.
 - Group rows under section labels (11px in light mode; 10.5px uppercase muted
-  lavender in dark mode), and separate groups with a 1px divider.
+  gray in dark mode), and separate groups with a 1px divider.
 - Do not put a glow (a blurred `box-shadow`) on a tile. The current row clips
   it, so it shows as a dim square behind the tile.
 - In the collapsed sidebar, Search is a tile like the other items: no row fill
   and no frame around it. Only the expanded sidebar shows Search as an input.
 - A menu that replaces another menu in place starts with a back row: a
-  centered label and a 12px chevron on the side of the direction. The back row
-  points left (`‹ Dashboard`). The row that opens the resource menu again from
-  the main menu points right (`adonisjs ›`) and shows the resource name.
-- Keep the menu items in the same place on every page. When a page has no
-  resource menu, keep an empty row of the same height where the resource row
-  would be.
+  centered label and a 12px left chevron (`‹ Dashboard`).
+- The main menu has no row above its items. Dashboard is the first item, right
+  under Search, on every page.
 
 ### Card (outer box, title row, well)
 
@@ -368,6 +390,7 @@ Class names below are examples. Keep the values and structure.
 
 - Use one primary button per area. Other actions are neutral buttons.
 - Destructive actions use the error color for text and focus ring.
+- With Appearance → Style → Flat, all buttons lose the raised edge.
 
 ### Menus, listboxes, and popovers
 
@@ -655,18 +678,19 @@ lift off the content:
 - **Topbar chrome** uses the canvas color in dark (`#0a0a0a`) and `bg-white`
   in light. It has no bottom border until the page scrolls under it. Scrolling
   adds `is-scrolled` on `<html>` (see `layouts/app.blade.php`) and the dark bar
-  becomes `rgb(10 10 10 / 0.72)` with blur and a lavender hairline. In dark
+  becomes `rgb(10 10 10 / 0.72)` with blur and a neutral hairline. In dark
   mode, top-level card wells and table rows use `--color-card` (`#121212`),
   not the top bar.
 - **Desktop sidebar and the topbar brand block** (Coolify name and version)
-  use the canvas color in light mode. In dark mode they use `--color-sidebar`
-  (`#120e1a`): a vertical brand wash on the nav, a flat 9% wash on the logo
-  cell (the same color as the top of the nav wash), and a lavender right
-  edge. Section labels are 10.5px uppercase mono in
-  muted lavender. Chevrons are hidden until the row is hovered, focused, or
-  current. The Admin icon stays neutral. The footer is transparent so the
-  wash continues. Do not use `dark:border-white/[0.06]` on these chrome edges;
-  a global rule forces that utility to the solid hairline grey.
+  use the canvas color in light mode. In the default dark theme they use
+  `--color-sidebar` (`#120e1a`): a vertical brand wash on the nav, a flat 9%
+  wash on the logo cell, and a lavender right edge. Inactive icon tiles,
+  Search, the account button, and section labels (10.5px uppercase mono) are
+  lavender. The Admin icon stays neutral. These purple rules use
+  `html.dark:not([data-theme="custom"])`; a custom theme keeps neutral tiles,
+  Search, and account button. Chevrons are hidden until the row is hovered,
+  focused, or current. Do not use `dark:border-white/[0.06]` on these chrome
+  edges; a global rule forces that utility to the solid hairline grey.
 
 Dark surface tokens are exact oklch equivalents of chosen sRGB steps. oklch
 lightness compresses toward pure black below ~15%, so check the rendered sRGB
@@ -675,9 +699,10 @@ value. The dark ladder is `--color-app` 10, `--color-panel` 20,
 `--coollabs-recessed` 34 (sRGB, r=g=b), which reads as distinct surfaces.
 
 Temperature: the page canvas, cards, menus, listboxes, modals, and logs stay
-**pure neutral gray** (r=g=b). Do not tint those. The dark sidebar
-(`--color-sidebar`, `#120e1a`) and the dark command palette are the exceptions:
-they carry a faint brand-purple wash. The light page canvas uses `bg-neutral-50` (not
+**pure neutral gray** (r=g=b). Do not tint those. The exceptions are the
+default dark sidebar (`--color-sidebar`, `#120e1a`, with a brand-purple wash)
+and the dark command palette (a faint brand-purple wash). A custom theme derives all
+of these surfaces from its background and sidebar colors (see the token rules in P2). The light page canvas uses `bg-neutral-50` (not
 `bg-gray-50`, which is faintly cool) so it matches the neutral cards and chrome.
 The only intentional color is the purple brand accent. Yellow is for warnings.
 - **Layer cards** use the outer box and inset well from section 5.
@@ -775,12 +800,9 @@ state because it can disappear after polling or a Livewire morph.
 From `xl`, the resource menu replaces the main menu in the main sidebar
 (`x-main-nav-menu`, `registerMainNavContext()`, `components/navbar.blade.php`).
 Its back row (`‹ Dashboard`, `‹ Servers`, `‹ Service`) shows the menu one depth
-lower, without a page load. The main menu then starts with a row that opens the
-deepest resource menu again: the resource name with a right chevron
-(`adonisjs ›`). Pass the name as `name` to `registerMainNavContext()` or
-`<x-main-nav-menu :name>`; without a name the row says "Resource menu". Pages
-with no resource menu keep an invisible row of the same height, so the main
-menu items do not move between pages.
+lower, without a page load. The main menu has no row that opens the resource
+menu again; to get back to it, open the resource again. Dashboard is always the
+first item under Search.
 
 The global topbar owns the current resource identity, its compact status
 badges, configuration warnings (`#configuration-warning-hud-slot`), and the

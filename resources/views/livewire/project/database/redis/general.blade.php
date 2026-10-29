@@ -35,6 +35,9 @@
                     @endif
                     @if ($isPasswordHiddenForMember)
                         <x-forms.input label="Password" disabled value="Hidden (only admins can view)" />
+                    @elseif ($isPasswordLocked)
+                        <x-forms.input label="Password" disabled value="Locked (shown once)"
+                            helper="REDIS_PASSWORD is locked. Its value is never shown again." />
                     @else
                         <x-forms.input label="Password" id="redisPassword" type="password"
                             :required="!$database->started_at"
@@ -87,18 +90,26 @@
 
         <x-application.settings-section id="container-section" title="Container"
             description="Docker options, configuration, and log forwarding for the database container.">
-            <x-forms.input
-                helper="Add supported docker run options used when the container starts. Unsupported options can interfere with Coolify automation."
-                placeholder="--cap-add SYS_ADMIN --device=/dev/fuse"
-                id="customDockerRunOptions" label="Custom Docker options" canGate="update"
-                :canResource="$database" />
+            @if ($isPasswordHiddenForMember)
+                <x-forms.input label="Custom Docker options" disabled value="Hidden (only admins can view)" />
+            @else
+                <x-forms.input
+                    helper="Add supported docker run options used when the container starts. Unsupported options can interfere with Coolify automation."
+                    placeholder="--cap-add SYS_ADMIN --device=/dev/fuse"
+                    id="customDockerRunOptions" label="Custom Docker options" canGate="update"
+                    :canResource="$database" />
+            @endif
             <x-application.settings-subsection id="configuration-section" title="Configuration" helper="Override only the Redis directives you need. All other defaults remain active.">
-                <x-forms.textarea placeholder="# maxmemory 256mb
+                @if ($isPasswordHiddenForMember)
+                    <x-forms.input label="Custom Redis configuration" disabled value="Hidden (only admins can view)" />
+                @else
+                    <x-forms.textarea placeholder="# maxmemory 256mb
     # maxmemory-policy allkeys-lru
     # timeout 300"
-                    helper="Coolify automatically applies requirepass using the password above. If you override requirepass here, keep both values identical."
-                    label="Custom Redis configuration" rows="10" id="redisConf" canGate="update"
-                    :canResource="$database" />
+                        helper="Coolify automatically applies requirepass using the password above. If you override requirepass here, keep both values identical."
+                        label="Custom Redis configuration" rows="10" id="redisConf" canGate="update"
+                        :canResource="$database" />
+                @endif
             </x-application.settings-subsection>
             <x-application.settings-subsection id="log-delivery-section" title="Log delivery" helper="Forward container logs to the drain configured on the server.">
                 <x-forms.listbox canGate="update" :canResource="$database" id="isLogDrainEnabled" label="Log drain" live onChange="instantSaveAdvanced"

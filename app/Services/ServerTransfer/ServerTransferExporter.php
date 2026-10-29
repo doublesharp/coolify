@@ -564,6 +564,8 @@ class ServerTransferExporter
             $steps[] = 'After the GitHub App sends webhooks to {target_url}, open this server there, check the runner requirements, and enable GitHub runners. '
                 .'Enabling them stops runners that another Coolify instance started on this server.';
         }
+        $steps[] = 'This instance keeps a copy of the SSH key of the server. On {target_url}, add a new SSH key to the server and select it there, '
+            .'then remove the old public key from ~/.ssh/authorized_keys on the server.';
 
         return $steps;
     }
@@ -1488,6 +1490,7 @@ class ServerTransferExporter
             'secret' => $storage->secret,
             'bucket' => $storage->bucket,
             'endpoint' => $storage->endpoint,
+            'use_path_style_endpoint' => $storage->usesPathStyleEndpoint(),
             'is_usable' => (bool) $storage->is_usable,
         ];
     }
@@ -1643,6 +1646,7 @@ class ServerTransferExporter
                 'docker_registry_image_tag' => $preview->docker_registry_image_tag,
                 'domain_port_overrides' => $preview->domain_port_overrides,
                 'max_restart_count' => $preview->max_restart_count,
+                'keeps_production_values' => $preview->keeps_production_values,
                 'persistent_storages' => method_exists($preview, 'persistentStorages')
                     ? $this->exportPersistentStorages($preview->persistentStorages)
                     : [],

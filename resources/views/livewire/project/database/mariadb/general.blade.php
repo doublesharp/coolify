@@ -88,14 +88,22 @@
 
         <x-application.settings-section id="container-section" title="Container"
             description="Docker options, configuration, and log forwarding for the database container.">
-            <x-forms.input
-                helper="Add supported docker run options used when the container starts. Unsupported options can interfere with Coolify automation."
-                placeholder="--cap-add SYS_ADMIN --device=/dev/fuse"
-                id="customDockerRunOptions" label="Custom Docker options" canGate="update"
-                :canResource="$database" />
+            @if ($isPasswordHiddenForMember)
+                <x-forms.input label="Custom Docker options" disabled value="Hidden (only admins can view)" />
+            @else
+                <x-forms.input
+                    helper="Add supported docker run options used when the container starts. Unsupported options can interfere with Coolify automation."
+                    placeholder="--cap-add SYS_ADMIN --device=/dev/fuse"
+                    id="customDockerRunOptions" label="Custom Docker options" canGate="update"
+                    :canResource="$database" />
+            @endif
             <x-application.settings-subsection id="configuration-section" title="Configuration" helper="Override the MariaDB configuration used by this container.">
-                <x-forms.textarea label="Custom MariaDB configuration" rows="10" id="mariadbConf"
-                    canGate="update" :canResource="$database" />
+                @if ($isPasswordHiddenForMember)
+                    <x-forms.input label="Custom MariaDB configuration" disabled value="Hidden (only admins can view)" />
+                @else
+                    <x-forms.textarea label="Custom MariaDB configuration" rows="10" id="mariadbConf"
+                        canGate="update" :canResource="$database" />
+                @endif
             </x-application.settings-subsection>
             <x-application.settings-subsection id="log-delivery-section" title="Log delivery" helper="Forward container logs to the drain configured on the server.">
                 <x-forms.listbox canGate="update" :canResource="$database" id="isLogDrainEnabled" label="Log drain" live onChange="instantSaveAdvanced"
