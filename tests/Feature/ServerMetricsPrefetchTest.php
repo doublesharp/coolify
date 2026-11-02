@@ -71,7 +71,7 @@ it('does not retry an unavailable server after the batch fails', function () {
 it('quotes the bucketed history URL in a single fetch for a non-root user', function () {
     $commands = [];
     Process::fake(function (PendingProcess $process) use (&$commands) {
-        $commands[] = $process->command;
+        $commands[] = remoteProcessScript($process);
 
         return Process::result('[{"time":60000,"percent":5}]');
     });
@@ -79,7 +79,7 @@ it('quotes the bucketed history URL in a single fetch for a non-root user', func
 
     expect($this->server->getCpuMetrics(720))->toBe([[60000, 5.0]])
         ->and($commands)->toHaveCount(1)
-        ->and($commands[0])->toContain('sudo bash -c')
+        ->and($commands[0])->toContain('sudo docker exec -i coolify-sentinel sh -s')
         ->and($commands[0])->toMatch('/"http:\/\/localhost:8888\/api\/cpu\/history\?from=[^"]+&bucket_ms=60000"/');
 });
 
