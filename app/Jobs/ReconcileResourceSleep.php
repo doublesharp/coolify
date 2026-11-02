@@ -20,9 +20,12 @@ class ReconcileResourceSleep implements ShouldQueue
 
     public int $tries = 1;
 
-    public int $timeout = 240;
+    public int $timeout = 150;
 
-    public function __construct(public ?int $policyId = null, public ?string $action = null) {}
+    public function __construct(public ?int $policyId = null, public ?string $action = null)
+    {
+        $this->onQueue('resource-lifecycle');
+    }
 
     public function handle(ResourceSleep $lifecycle): void
     {
@@ -46,7 +49,7 @@ class ReconcileResourceSleep implements ShouldQueue
 
             return;
         }
-        ResourceSleepPolicy::where('enabled', true)->whereIn('state', ['awake', 'asleep', 'error'])->each(function ($policy) {
+        ResourceSleepPolicy::where(fn ($query) => $query->where('enabled', true)->orWhereNotNull('proxy_snapshot'))->each(function ($policy) {
             self::dispatch($policy->id);
         });
     }

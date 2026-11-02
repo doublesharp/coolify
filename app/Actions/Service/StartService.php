@@ -26,7 +26,6 @@ class StartService
 
     public function handle(Service $service, bool $pullLatestImages = false, bool $stopBeforeStart = false)
     {
-        app(ResourceSleep::class)->deployment($service);
         $service->parse();
         self::queueFileStorageSync($service);
         // Fetch remote secrets before stopping: if the secret manager fails, the service keeps running.
@@ -87,7 +86,7 @@ class StartService
             }
         }
 
-        return remote_process($commands, $service->server, type_uuid: $service->uuid, callEventOnFinish: 'ServiceStartFinished', callEventData: ServiceStartFinished::dataFor($service), queue: deployment_queue());
+        return remote_process($commands, $service->server, type_uuid: $service->uuid, callEventOnFinish: 'ServiceStartFinished', callEventData: ServiceStartFinished::dataFor($service), properties: app(ResourceSleep::class)->policyFor($service) ? ['resource_sleep_deployment_uuid' => $service->uuid] : [], queue: deployment_queue());
     }
 
     /**

@@ -97,6 +97,9 @@ class ServerTransferExporter
      */
     public function export(Server $server, bool $includeSensitive = true): array
     {
+        if (ResourceSleepPolicy::where('server_id', $server->id)->where('enabled', true)->where('state', '!=', 'awake')->exists()) {
+            throw new RuntimeException('Wake or disable automatic sleep before exporting this server.');
+        }
         if ($server->id === 0) {
             throw new RuntimeException('The Coolify host (localhost) cannot be transferred between instances.');
         }

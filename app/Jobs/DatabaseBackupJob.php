@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Events\BackupCreated;
 use App\Helpers\SshMultiplexingHelper;
 use App\Helpers\SshRetryHandler;
+use App\Jobs\Middleware\ResourceSleepWork;
 use App\Models\S3Storage;
 use App\Models\ScheduledDatabaseBackup;
 use App\Models\ScheduledDatabaseBackupExecution;
@@ -106,7 +107,7 @@ class DatabaseBackupJob implements ShouldBeEncrypted, ShouldQueue
     {
         $expireAfter = ($this->backup->timeout ?? 3600) + 300;
 
-        return [ScheduledJobDeliveryService::withoutOverlapping('database-backup-'.$this->backup->id, $this->occurrenceUuid)->expireAfter($expireAfter)->dontRelease()];
+        return [new ResourceSleepWork($this->backup->database), ScheduledJobDeliveryService::withoutOverlapping('database-backup-'.$this->backup->id, $this->occurrenceUuid)->expireAfter($expireAfter)->dontRelease()];
     }
 
     public function handle(): void
