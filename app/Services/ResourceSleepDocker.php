@@ -44,15 +44,16 @@ class ResourceSleepDocker
         if ($ids === []) {
             return;
         }
-        $attempts = max(1, (int) floor($timeout / 2));
+        $seconds = max(1, $timeout - 5);
         $containers = implode(' ', $ids);
         $health = escapeshellarg('{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{else}}healthy{{end}}');
         // One remote call, a bounded wait, and no background processes on the host.
         $commands = [
+            "deadline=$(($(date +%s) + $seconds))",
             "docker start $containers",
             "for container in $containers; do",
             '    ready=false',
-            "    for attempt in $(seq 1 $attempts); do",
+            '    while [ "$(date +%s)" -lt "$deadline" ]; do',
             "        state=$(docker inspect --format $health \"\$container\")",
             '        if [ "$state" = "true healthy" ]; then ready=true; break; fi',
             '        if [ "$state" = "false healthy" ] || [ "$state" = "true unhealthy" ]; then break; fi',
