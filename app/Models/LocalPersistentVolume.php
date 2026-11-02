@@ -32,10 +32,12 @@ class LocalPersistentVolume extends BaseModel
         'resource_type',
         'resource_id',
         'is_preview_suffix_enabled',
+        'is_read_only',
     ];
 
     protected $casts = [
         'is_preview_suffix_enabled' => 'boolean',
+        'is_read_only' => 'boolean',
         'ignores_compose_driver_options' => 'boolean',
     ];
 

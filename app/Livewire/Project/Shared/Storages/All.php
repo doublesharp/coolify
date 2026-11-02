@@ -12,6 +12,7 @@ use App\Models\ServiceApplication;
 use App\Models\ServiceDatabase;
 use App\Support\ValidationPatterns;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Support\Facades\Validator;
 use Livewire\Component;
 
 class All extends Component
@@ -24,7 +25,7 @@ class All extends Component
     /**
      * Editable form state keyed by storage id.
      *
-     * @var array<int|string, array{name: string, mountPath: string, isPreviewSuffixEnabled: bool, isReadOnly: bool, isShared: bool, canDeleteStale: bool, replacedExternalVolume: ?string, ignoresDriverOptions: bool, canDeleteToApplyDriverOptions: bool}>
+     * @var array<int|string, array{name: string, mountPath: string, isPreviewSuffixEnabled: bool, isReadOnlyMount: bool, isReadOnly: bool, isShared: bool, canDeleteStale: bool, replacedExternalVolume: ?string, ignoresDriverOptions: bool, canDeleteToApplyDriverOptions: bool}>
      */
     public array $forms = [];
 
@@ -90,7 +91,7 @@ class All extends Component
         $this->validateStorage($storageId);
 
         $storage = $this->findStorageOrFail($storageId);
-        if ($storage->shouldBeReadOnlyInUI()) {
+        if ($storage->shouldBeReadOnlyInUI() || data_get($this->resource, 'build_pack') === 'dockercompose') {
             $this->dispatch('error', 'This volume is read-only.');
 
             return;
@@ -102,6 +103,9 @@ class All extends Component
         }
         $storage->mount_path = $form['mountPath'];
         $storage->is_preview_suffix_enabled = (bool) $form['isPreviewSuffixEnabled'];
+        if ($this->resource instanceof Application) {
+            $storage->is_read_only = (bool) $form['isReadOnlyMount'];
+        }
         $changedFields = auditChangedFields($storage);
         $storage->save();
 
@@ -109,12 +113,30 @@ class All extends Component
             $this->auditStorageChange($this->resource, 'updated', $storage, ['changed_fields' => $changedFields]);
         }
 
+        $this->dispatch('configurationChanged');
         $this->dispatch('success', 'Storage updated successfully');
     }
 
     public function instantSave(int $storageId): void
     {
         $this->submit($storageId);
+    }
+
+    public function saveMountAccess(int $storageId, mixed $readOnly): void
+    {
+        $this->authorize('update', $this->resource);
+        abort_unless($this->resource instanceof Application && $this->resource->build_pack !== 'dockercompose', 422, 'Edit mount access in the Docker Compose file.');
+        Validator::make(['is_read_only' => $readOnly], ['is_read_only' => 'required|boolean'])->validate();
+        $storage = $this->findStorageOrFail($storageId);
+        $storage->is_read_only = (bool) $readOnly;
+        $changedFields = auditChangedFields($storage);
+        $storage->save();
+        $this->forms[$storageId]['isReadOnlyMount'] = (bool) $readOnly;
+        if ($changedFields !== []) {
+            $this->auditStorageChange($this->resource, 'updated', $storage, ['changed_fields' => $changedFields]);
+        }
+        $this->dispatch('configurationChanged');
+        $this->dispatch('success', 'Storage updated successfully');
     }
 
     /**
@@ -213,6 +235,7 @@ class All extends Component
                 'name' => $storage->name,
                 'mountPath' => $storage->mount_path,
                 'isPreviewSuffixEnabled' => (bool) ($storage->is_preview_suffix_enabled ?? true),
+                'isReadOnlyMount' => (bool) $storage->is_read_only,
                 'isReadOnly' => $storage->shouldBeReadOnlyInUI() || ! $this->canUpdate,
                 'isShared' => $storage->isSharedWithAnotherResource(),
                 'canDeleteStale' => $this->canUpdate
@@ -306,6 +329,7 @@ class All extends Component
             "forms.{$storageId}.name" => ValidationPatterns::volumeNameRules(),
             "forms.{$storageId}.mountPath" => ['required', 'string', 'regex:'.ValidationPatterns::DIRECTORY_PATH_PATTERN],
             "forms.{$storageId}.isPreviewSuffixEnabled" => 'required|boolean',
+            "forms.{$storageId}.isReadOnlyMount" => 'required|boolean',
         ], array_merge(
             ValidationPatterns::volumeNameMessages(),
             [

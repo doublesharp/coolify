@@ -87,6 +87,9 @@
                                 <span
                                     class="block min-w-0 truncate text-[13px] text-neutral-950 dark:text-fg"
                                     title="{{ $form['mountPath'] }}">{{ $form['mountPath'] }}</span>
+                                @if ($resource instanceof \App\Models\Application && $resource->build_pack !== 'dockercompose')
+                                    <span class="block text-xs text-neutral-500 dark:text-fg-dim">{{ $form['isReadOnlyMount'] ? 'Read only' : 'Read and write' }}</span>
+                                @endif
                             </div>
 
                             @if ($supportsPreviewSuffix)
@@ -217,6 +220,13 @@
                                 <span class="volumes-mobile-label volumes-field-label">Destination Path</span>
                                 <x-forms.input id="forms.{{ $id }}.mountPath" required
                                     placeholder="/path/in/container" />
+                                @if ($resource instanceof \App\Models\Application)
+                                    <x-forms.listbox id="forms.{{ $id }}.isReadOnlyMount" label="Mount access"
+                                        helper="Changes take effect after redeployment." onChange="saveMountAccess" :onChangeArgs="[$id]" portal :options="[
+                                            ['value' => false, 'label' => 'Read and write'],
+                                            ['value' => true, 'label' => 'Read only'],
+                                        ]" canGate="update" :canResource="$resource" />
+                                @endif
                             </div>
 
                             @if ($supportsPreviewSuffix)
