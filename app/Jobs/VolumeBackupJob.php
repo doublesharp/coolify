@@ -8,6 +8,7 @@ use App\Helpers\SshRetryHandler;
 use App\Jobs\Middleware\ResourceSleepWork;
 use App\Models\LocalPersistentVolume;
 use App\Models\S3Storage;
+use App\Models\ScheduledJobDelivery;
 use App\Models\ScheduledVolumeBackup;
 use App\Models\ScheduledVolumeBackupExecution;
 use App\Models\Server;
@@ -38,9 +39,14 @@ class VolumeBackupJob implements ShouldBeEncrypted, ShouldQueue
 
     private ?ScheduledVolumeBackupExecution $execution = null;
 
+    /** Allow lifecycle deferrals without consuming the supervisor's one-attempt limit. */
+    public int $retryUntil;
+
     public function __construct(public ScheduledVolumeBackup $backup, public ?string $occurrenceUuid = null)
     {
         $this->onQueue(crons_queue());
+        $scheduledFor = $occurrenceUuid ? ScheduledJobDelivery::where('uuid', $occurrenceUuid)->value('scheduled_for') : null;
+        $this->retryUntil = Carbon::parse($scheduledFor ?? now())->addHours(ScheduledJobDeliveryService::LATE_RUN_MAX_AGE_HOURS)->timestamp;
         $this->timeout = $backup->timeout ?? ScheduledVolumeBackup::DEFAULT_TIMEOUT;
     }
 
@@ -276,6 +282,8 @@ class VolumeBackupJob implements ShouldBeEncrypted, ShouldQueue
     public function failed(?Throwable $exception): void
     {
         if ($this->occurrenceUuid) {
+            // Admission can fail before handle() claims the occurrence.
+            app(ScheduledJobDeliveryService::class)->claim($this->occurrenceUuid, $this->job?->uuid() ?? $this->occurrenceUuid);
             app(ScheduledJobDeliveryService::class)->fail($this->occurrenceUuid, $this->job?->uuid() ?? $this->occurrenceUuid);
         }
 
