@@ -156,7 +156,7 @@ class All extends Component
 
     public function delete(int $storageId, $password = '', $selectedActions = [])
     {
-        $this->authorize('update', $this->resource);
+        $this->authorize('delete', $this->resource);
 
         if (! verifyPasswordConfirmation($password, $this)) {
             return 'The provided password is incorrect.';

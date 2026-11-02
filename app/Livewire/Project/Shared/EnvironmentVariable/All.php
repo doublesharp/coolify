@@ -302,7 +302,7 @@ class All extends Component
 
     private function canViewEnvironmentValues(): bool
     {
-        return auth()->user()?->can('manageEnvironment', $this->resource) ?? false;
+        return auth()->user()?->can('viewSensitive', $this->resource) ?? false;
     }
 
     private function nullLockedValues($envs)
@@ -848,8 +848,7 @@ class All extends Component
         }
         // Otherwise keep order from docker-compose file
 
-        // Compose content is visible only to users who can edit the resource.
-        $canViewValues = auth()->user()?->can('update', $this->resource) ?? false;
+        $canViewValues = $this->canViewEnvironmentValues();
 
         return $hardcodedVars->map(fn (array $variable): array => [
             ...$variable,
@@ -991,8 +990,25 @@ class All extends Component
 
         return $variables
             ->reject(fn ($item): bool => $this->isProtectedEnvironmentVariable($item->key))
-            ->map(fn ($item) => formatEnvVariableForDevView($item, $canViewValues))
+            ->map(fn ($item) => $this->composeDefaultHint($item).formatEnvVariableForDevView($item, $canViewValues))
             ->join("\n");
+    }
+
+    /**
+     * An empty value makes the deployment use the Compose default, so show that default above the line.
+     */
+    private function composeDefaultHint(EnvironmentVariable $variable): string
+    {
+        if (filled($variable->value) || ! $this->showsHardcodedEnvironmentVariables()) {
+            return '';
+        }
+
+        $default = $this->composeInfoFor($variable->key)['default'] ?? null;
+        if (blank($default) || str_contains($default, "\n")) {
+            return '';
+        }
+
+        return "# Compose default: {$default}\n";
     }
 
     public function switch()
