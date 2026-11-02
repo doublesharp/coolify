@@ -179,7 +179,7 @@ final class ServerTransferCoverage
      */
     public const NOT_EXPORTED_COLUMNS = [
         ResourceSleepPolicy::class => [
-            'resource_uuid' => self::LINKED, 'server_id' => self::LINKED, 'team_id' => self::TEAM,
+            'activity_version' => self::RUNTIME, 'resource_uuid' => self::LINKED, 'server_id' => self::LINKED, 'team_id' => self::TEAM,
             'proxy_token' => self::RUNTIME, 'state' => self::RUNTIME, 'last_activity_at' => self::RUNTIME,
             'woke_at' => self::RUNTIME, 'containers' => self::RUNTIME, 'proxy_snapshot' => self::RUNTIME, 'error' => self::RUNTIME,
         ],

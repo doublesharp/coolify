@@ -30,28 +30,30 @@ class ResourceSleepDocker
         return collect(explode("\n", trim($output ?? '')))->filter()->map(fn ($line) => json_decode($line, true, flags: JSON_THROW_ON_ERROR))->all();
     }
 
-    public function stop(Server $server, array $ids): void
+    public function stop(Server $server, array $ids, int $timeout = 90): void
     {
         $ids = $this->ids($ids);
         if ($ids !== []) {
-            instant_remote_process(['docker stop --time 30 '.implode(' ', $ids)], $server, timeout: 90, maxAttempts: 1);
+            instant_remote_process(['docker stop --time 30 '.implode(' ', $ids)], $server, timeout: min(90, $timeout), maxAttempts: 1);
         }
     }
 
-    public function start(Server $server, array $ids): void
+    public function start(Server $server, array $ids, int $timeout = 120): void
     {
         $ids = $this->ids($ids);
         if ($ids === []) {
             return;
         }
+        $seconds = max(1, $timeout - 5);
         $containers = implode(' ', $ids);
         $health = escapeshellarg('{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{else}}healthy{{end}}');
         // One remote call, a bounded wait, and no background processes on the host.
         $commands = [
+            "deadline=$(($(date +%s) + $seconds))",
             "docker start $containers",
             "for container in $containers; do",
             '    ready=false',
-            '    for attempt in $(seq 1 60); do',
+            '    while [ "$(date +%s)" -lt "$deadline" ]; do',
             "        state=$(docker inspect --format $health \"\$container\")",
             '        if [ "$state" = "true healthy" ]; then ready=true; break; fi',
             '        if [ "$state" = "false healthy" ] || [ "$state" = "true unhealthy" ]; then break; fi',
@@ -60,7 +62,7 @@ class ResourceSleepDocker
             '    if [ "$ready" != true ]; then echo "Container did not become healthy" >&2; exit 1; fi',
             'done',
         ];
-        instant_remote_process(['bash -c '.escapeshellarg(implode("\n", $commands))], $server, timeout: 180, maxAttempts: 1);
+        instant_remote_process(['bash -c '.escapeshellarg(implode("\n", $commands))], $server, timeout: $timeout, maxAttempts: 1);
     }
 
     private function ids(array $ids): array

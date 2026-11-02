@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestWaitsForWakeAndForwardsOriginalRequest(t *testing.T) {
@@ -65,6 +66,69 @@ func TestManagementFailureDoesNotForwardRequest(t *testing.T) {
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest("GET", "/", nil))
 	if response.Code != 503 {
+		t.Fatalf("status %d", response.Code)
+	}
+}
+
+func TestAwakeRequestSurvivesTemporaryManagementOutage(t *testing.T) {
+	outage := false
+	callback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if outage {
+			w.WriteHeader(503)
+			return
+		}
+		fmt.Fprint(w, `{"ready":true}`)
+	}))
+	defer callback.Close()
+	forwarded := 0
+	handler, err := New(context.Background(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { forwarded++; w.WriteHeader(204) }), &Config{CallbackURL: callback.URL, Token: "token", TimeoutSeconds: 1}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+	outage = true
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest("GET", "/", nil))
+	if response.Code != 204 || forwarded != 2 {
+		t.Fatalf("awake request blocked: status=%d forwarded=%d", response.Code, forwarded)
+	}
+}
+
+func TestHeartbeatFailureDoesNotCancelAnActiveStream(t *testing.T) {
+	heartbeat := make(chan struct{}, 1)
+	callback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), `"phase":"heartbeat"`) {
+			select {
+			case heartbeat <- struct{}{}:
+			default:
+			}
+			w.WriteHeader(503)
+			return
+		}
+		fmt.Fprint(w, `{"ready":true}`)
+	}))
+	defer callback.Close()
+	handler, err := New(context.Background(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-heartbeat:
+		case <-time.After(time.Second):
+			t.Fatal("missing heartbeat")
+		}
+		select {
+		case <-r.Context().Done():
+			t.Error("management outage cancelled stream")
+		case <-time.After(25 * time.Millisecond):
+		}
+		w.WriteHeader(204)
+	}), &Config{CallbackURL: callback.URL, Token: "token", TimeoutSeconds: 1}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.(*middleware).heartbeat = 5 * time.Millisecond
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest("GET", "/", nil))
+	if response.Code != 204 {
 		t.Fatalf("status %d", response.Code)
 	}
 }

@@ -34,19 +34,9 @@ class ResourceSleepProxy
             throw new RuntimeException('Request activity requires a managed Traefik service.');
         }
         $files = ['.traefik.yml', 'go.mod', 'resource_sleep.go'];
-        $hash = hash('sha256', implode('', array_map(fn ($file) => file_get_contents(resource_path('proxy/resource-sleep/'.$file)), $files)));
-        $flag = '--experimental.localplugins.resourcesleep.modulename='.self::MODULE;
-        $service = &$config['services']['traefik'];
-        $commands = withoutProxyComposeTags($service['command'] ?? []);
-        if (! is_array($commands)) {
-            throw new RuntimeException('Request activity requires a list of Traefik commands.');
-        }
-        $mount = $path.'/plugins-local:/plugins-local:ro';
-        $volumes = withoutProxyComposeTags($service['volumes'] ?? []);
-        if (! is_array($volumes)) {
-            throw new RuntimeException('Request activity requires a list of proxy volumes.');
-        }
-        if ($server->proxy->get('resource_sleep_plugin_hash') === $hash && in_array($flag, $commands, true) && in_array($mount, $volumes, true)) {
+        $hash = $this->pluginHash();
+        $updated = $this->managedConfiguration($server, $configuration);
+        if ($server->proxy->get('resource_sleep_plugin_hash') === $hash && parseProxyComposeYaml($updated) == $config) {
             return;
         }
         $directory = $path.'/plugins-local/src/'.self::MODULE;
@@ -54,9 +44,7 @@ class ResourceSleepProxy
         foreach ($files as $file) {
             $server->uploadProxyFile($directory.'/'.$file, file_get_contents(resource_path('proxy/resource-sleep/'.$file)));
         }
-        $service['command'] = updateTaggedProxyComposeList($service['command'] ?? [], fn ($items) => array_values(array_unique([...$items, $flag])), 'Invalid Traefik commands.');
-        $service['volumes'] = updateTaggedProxyComposeList($service['volumes'] ?? [], fn ($items) => array_values([...$items, ...(! in_array($mount, $items, true) ? [$mount] : [])]), 'Invalid proxy volumes.');
-        SaveProxyConfiguration::run($server, Yaml::dump($config, 20, 2, Yaml::DUMP_OBJECT_AS_MAP | Yaml::DUMP_EMPTY_ARRAY_AS_SEQUENCE));
+        SaveProxyConfiguration::run($server, $updated);
         instant_remote_process([
             'docker compose -f '.escapeshellarg($path.'/docker-compose.yml').' up -d --force-recreate --no-deps --wait traefik',
             ...connectProxyToNetworks($server),
@@ -68,7 +56,13 @@ class ResourceSleepProxy
     public function prepare(ResourceSleepPolicy $policy, ?array $inventory = null): void
     {
         $server = Server::findOrFail($policy->server_id);
-        $this->install($server);
+        // Only an explicit settings save installs/restarts the shared proxy.
+        $configuration = GetProxyConfiguration::run($server);
+        if ($server->proxy->get('resource_sleep_plugin_hash') !== $this->pluginHash()
+            || parseProxyComposeYaml($configuration) != parseProxyComposeYaml($this->managedConfiguration($server, $configuration))) {
+            throw new RuntimeException('Save request activity settings to apply the proxy update.');
+        }
+        $this->probe($policy);
         $resource = getResourceByUuid($policy->resource_uuid, $policy->team_id);
         if (! $resource) {
             throw new RuntimeException('Sleep resource is missing.');
@@ -77,16 +71,28 @@ class ResourceSleepProxy
         if ($containers === []) {
             return;
         }
-        $raw = instant_remote_process(['docker exec coolify-proxy wget -qO- http://127.0.0.1:8080/api/rawdata'], $server, timeout: 10, maxAttempts: 1);
-        $configuration = $this->configuration($policy, $containers, json_decode($raw ?? '', true, flags: JSON_THROW_ON_ERROR));
+        // Docker provider discovery can lag an explicit proxy restart by a few seconds.
+        for ($attempt = 0; $attempt < 5; $attempt++) {
+            $raw = instant_remote_process(['docker exec coolify-proxy wget -qO- http://127.0.0.1:8080/api/rawdata'], $server, timeout: 5, maxAttempts: 1);
+            try {
+                $configuration = $this->configuration($policy, $containers, json_decode($raw ?? '', true, flags: JSON_THROW_ON_ERROR));
+                break;
+            } catch (RuntimeException $exception) {
+                if ($attempt === 4) {
+                    throw $exception;
+                }
+                sleep(1);
+            }
+        }
         $this->write($server, $policy, $configuration);
         $this->waitForRoutes($server, array_keys($configuration['http']['routers']), true);
         $policy->update(['proxy_snapshot' => $configuration]);
     }
 
-    public function waitForBackends(ResourceSleepPolicy $policy): void
+    public function waitForBackends(ResourceSleepPolicy $policy, int $timeout = 75): void
     {
-        $commands = ['deadline=$(($(date +%s) + 60))'];
+        $seconds = max(1, min(60, $timeout - 5));
+        $commands = ['deadline=$(($(date +%s) + '.$seconds.'))'];
         foreach ($policy->proxy_snapshot['http']['services'] ?? [] as $service) {
             foreach ($service['loadBalancer']['servers'] ?? [] as $backend) {
                 $url = parse_url($backend['url']);
@@ -100,7 +106,7 @@ class ResourceSleepProxy
                 ];
             }
         }
-        instant_remote_process(['bash -c '.escapeshellarg(implode("\n", $commands))], Server::findOrFail($policy->server_id), timeout: 75, maxAttempts: 1);
+        instant_remote_process(['bash -c '.escapeshellarg(implode("\n", $commands))], Server::findOrFail($policy->server_id), timeout: $timeout, maxAttempts: 1);
     }
 
     public function remove(ResourceSleepPolicy $policy): void
@@ -195,9 +201,8 @@ class ResourceSleepProxy
             return $key;
         };
         $middleware = $prefix.'activity';
-        $baseUrl = rtrim(instanceSettings()->fqdn ?: config('app.url'), '/');
         $http['middlewares'][$middleware] = ['plugin' => ['resourcesleep' => [
-            'callbackURL' => $baseUrl.'/api/resource-sleep/'.$policy->resource_uuid.'/activity',
+            'callbackURL' => $this->callbackUrl($policy),
             'token' => $policy->proxy_token, 'timeoutSeconds' => 180,
         ]]];
         foreach (array_keys($names) as $name) {
@@ -234,6 +239,85 @@ class ResourceSleepProxy
             sleep(1);
         }
         throw new RuntimeException('The proxy did not apply the resource sleep routes.');
+    }
+
+    /** Preserve the plugin when native proxy settings are reset or edited. */
+    public function managedConfiguration(Server $server, string $configuration): string
+    {
+        $config = parseProxyComposeYaml($configuration);
+        if (! isset($config['services']['traefik'])) {
+            throw new RuntimeException('Request activity requires a managed Traefik service.');
+        }
+        $service = &$config['services']['traefik'];
+        $service['command'] = updateTaggedProxyComposeList($service['command'] ?? [], function ($items) {
+            $items[] = '--experimental.localplugins.resourcesleep.modulename='.self::MODULE;
+            foreach (['http', 'https'] as $entry) {
+                if (! collect($items)->contains(fn ($flag) => str_starts_with(strtolower($flag), '--entrypoints.'.$entry.'.address='))) {
+                    continue;
+                }
+                $prefix = '--entrypoints.'.$entry.'.transport.respondingtimeouts.readtimeout=';
+                $found = false;
+                foreach ($items as &$flag) {
+                    if (! str_starts_with(strtolower($flag), $prefix)) {
+                        continue;
+                    }
+                    $found = true;
+                    $value = substr($flag, strlen($prefix));
+                    // Zero disables the timeout; preserve explicit values longer than our wait.
+                    $seconds = preg_match('/^(\d+(?:\.\d+)?)(ms|s|m|h)?$/i', $value, $parts)
+                        ? (float) $parts[1] * match (strtolower($parts[2] ?? 's')) {
+                            'ms' => .001, 'm' => 60, 'h' => 3600, default => 1
+                        }
+                    : -1;
+                    if ($seconds != 0 && $seconds < 240) {
+                        $flag = $prefix.'240s';
+                    }
+                }
+                unset($flag);
+                if (! $found) {
+                    $items[] = $prefix.'240s';
+                }
+            }
+
+            return array_values(array_unique($items));
+        }, 'Invalid Traefik commands.');
+        $mount = $this->path($server).'/plugins-local:/plugins-local:ro';
+        $service['volumes'] = updateTaggedProxyComposeList($service['volumes'] ?? [], fn ($items) => array_values(array_unique([...$items, $mount])), 'Invalid proxy volumes.');
+
+        return Yaml::dump($config, 20, 2, Yaml::DUMP_OBJECT_AS_MAP | Yaml::DUMP_EMPTY_ARRAY_AS_SEQUENCE);
+    }
+
+    /** Verify the scoped callback from the actual proxy before publishing a higher priority route. */
+    public function probe(ResourceSleepPolicy $policy): void
+    {
+        $server = Server::findOrFail($policy->server_id);
+        $name = 'resource-sleep-probe-'.bin2hex(random_bytes(8)).'.header';
+        $path = $this->path($server).'/'.$name;
+        try {
+            // The credential is transferred as a private file, never included in command output.
+            $server->uploadProxyFile($path, 'Authorization: Bearer '.$policy->proxy_token, 0600);
+            $body = json_encode(['phase' => 'probe', 'request_id' => str_repeat('0', 32)]);
+            $script = 'wget -qO- -T 5 --header "$(cat '.escapeshellarg('/traefik/'.$name).')" --header '.escapeshellarg('Content-Type: application/json').' --post-data '.escapeshellarg($body).' '.escapeshellarg($this->callbackUrl($policy));
+            $output = instant_remote_process(['docker exec coolify-proxy sh -c '.escapeshellarg($script)], $server, timeout: 10, maxAttempts: 1);
+            $result = json_decode($output ?? '', true);
+            if (! is_array($result) || ! is_bool($result['ready'] ?? null)) {
+                throw new RuntimeException('Invalid callback response.');
+            }
+        } catch (\Throwable) {
+            throw new RuntimeException('Coolify must be reachable from coolify-proxy. Configure a reachable instance URL before enabling request activity.');
+        } finally {
+            instant_remote_process(['rm -f '.escapeshellarg($path)], $server, throwError: false, timeout: 5, maxAttempts: 1);
+        }
+    }
+
+    private function callbackUrl(ResourceSleepPolicy $policy): string
+    {
+        return rtrim(instanceSettings()->fqdn ?: config('app.url'), '/').'/api/resource-sleep/'.$policy->resource_uuid.'/activity';
+    }
+
+    private function pluginHash(): string
+    {
+        return hash('sha256', implode('', array_map(fn ($file) => file_get_contents(resource_path('proxy/resource-sleep/'.$file)), ['.traefik.yml', 'go.mod', 'resource_sleep.go'])));
     }
 
     private function path(Server $server): string

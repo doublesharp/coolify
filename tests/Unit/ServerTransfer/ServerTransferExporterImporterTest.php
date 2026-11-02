@@ -2023,12 +2023,12 @@ test('an application with a system-wide GitHub App that the target lacks is list
         ->and(collect(data_get($server->server_metadata, 'transfer.finish.items'))->pluck('key'))->toContain("git_source:{$this->application->uuid}");
 });
 
-test('sleep settings transfer with mapped dependency UUIDs and fresh runtime credentials', function () {
+test('awake sleep settings transfer with mapped dependency UUIDs and fresh runtime credentials', function () {
     $policy = app(ResourceSleep::class)->configure($this->application, [
         'enabled' => true, 'idle_timeout_seconds' => 900, 'dependencies' => [$this->database->uuid],
         'webhooks' => ['after_sleep' => 'https://8.8.8.8/hook'],
     ]);
-    $policy->update(['state' => 'asleep', 'containers' => ['private-runtime-state']]);
+    $policy->update(['state' => 'awake', 'containers' => ['private-runtime-state']]);
     $secret = $policy->webhook_secret;
     $proxyToken = $policy->proxy_token;
     $bundle = app(ServerTransferExporter::class)->export($this->server);

@@ -24,6 +24,7 @@ use App\Models\SwarmDocker;
 use App\Notifications\Application\DeploymentFailed;
 use App\Notifications\Application\DeploymentSuccess;
 use App\Services\DeploymentConfiguration\ApplicationConfigurationSnapshot;
+use App\Services\ResourceSleep;
 use App\Support\ApplicationVolumeMount;
 use App\Support\RemoteSecretReferences;
 use App\Support\RemoteSecretValueFormatter;
@@ -283,7 +284,7 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
             $this->application->setRelation('source', $this->source);
         }
         $this->server = Server::find($this->application_deployment_queue->server_id);
-        $this->timeout = $this->server->settings->dynamic_timeout;
+        $this->timeout = $this->server->settings->dynamic_timeout + (app(ResourceSleep::class)->policyFor($this->application) ? ResourceSleep::DEPLOYMENT_PREPARATION_SECONDS : 0);
         $this->destination = $this->server->destinations()->where('id', $this->application_deployment_queue->destination_id)->first();
         $this->server = $this->mainServer = $this->destination->server;
         $this->serverUser = $this->server->user;
@@ -397,6 +398,7 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
             return;
         }
         try {
+            app(ResourceSleep::class)->deployment($this->application);
             // Make sure the private key is stored in the filesystem
             $this->server->privateKey->storeInFileSystem();
             // Generate custom host<->ip mapping

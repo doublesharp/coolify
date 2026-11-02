@@ -19,6 +19,7 @@ use App\Models\ManagedDnsRecord;
 use App\Models\PrivateKey;
 use App\Models\Project;
 use App\Models\ResourceLink;
+use App\Models\ResourceSleepPolicy;
 use App\Models\S3Storage;
 use App\Models\ScheduledDatabaseBackup;
 use App\Models\ScheduledTask;
@@ -236,6 +237,7 @@ test('every exported value arrives unchanged on the target', function () {
         Environment::class => ['canvas_positions'],
     ];
     $values = [
+        ResourceSleepPolicy::class => ['state' => 'awake'],
         Server::class => ['proxy' => ['type' => 'TRAEFIK', 'status' => 'running', 'redirect_enabled' => false, 'redirect_url' => 'https://fuzz.example.test']],
         Application::class => ['fqdn' => 'https://fuzz-a.example.test,https://fuzz-b.example.test', 'domain_port_overrides' => null, 'noindex_domains' => ['https://fuzz-b.example.test']],
         ApplicationPreview::class => ['fqdn' => 'https://pr-fuzz.example.test', 'domain_port_overrides' => null],

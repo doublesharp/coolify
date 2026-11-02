@@ -4,6 +4,8 @@ namespace App\Jobs;
 
 use App\Actions\CoolifyTask\RunRemoteProcess;
 use App\Enums\ProcessStatus;
+use App\Models\Service;
+use App\Services\ResourceSleep;
 use App\Support\DatabaseImport\DatabaseImportCleanup;
 use App\Support\RemoteProcessCommand;
 use Illuminate\Bus\Queueable;
@@ -52,6 +54,9 @@ class CoolifyTask implements ShouldBeEncrypted, ShouldQueue
             $this->timeout = $timeout;
         }
 
+        if ($activity->getExtraProperty('resource_sleep_deployment_uuid')) {
+            $this->timeout += ResourceSleep::DEPLOYMENT_PREPARATION_SECONDS;
+        }
         $this->onQueue($queue);
     }
 
@@ -66,6 +71,11 @@ class CoolifyTask implements ShouldBeEncrypted, ShouldQueue
             RemoteProcessCommand::forget($this->activity);
 
             return;
+        }
+
+        $uuid = $this->activity->getExtraProperty('resource_sleep_deployment_uuid');
+        if ($uuid && ($resource = Service::whereUuid($uuid)->first())) {
+            app(ResourceSleep::class)->deployment($resource);
         }
 
         $remote_process = resolve(RunRemoteProcess::class, [
