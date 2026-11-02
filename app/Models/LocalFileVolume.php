@@ -84,6 +84,7 @@ class LocalFileVolume extends BaseModel
         'is_directory' => 'boolean',
         'is_host_file' => 'boolean',
         'is_preview_suffix_enabled' => 'boolean',
+        'is_read_only' => 'boolean',
     ];
 
     protected $hidden = [
@@ -102,6 +103,7 @@ class LocalFileVolume extends BaseModel
         'is_host_file',
         'is_based_on_git',
         'is_preview_suffix_enabled',
+        'is_read_only',
     ];
 
     public $appends = ['is_binary', 'is_too_large'];

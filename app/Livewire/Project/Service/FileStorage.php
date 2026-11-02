@@ -39,6 +39,8 @@ class FileStorage extends Component
 
     public bool $isReadOnly = false;
 
+    public bool $isReadOnlyMount = false;
+
     public bool $hasEnabledBackup = false;
 
     public ?string $backupUrl = null;
@@ -73,6 +75,7 @@ class FileStorage extends Component
         }
 
         $this->isReadOnly = $this->fileStorage->shouldBeReadOnlyInUI() || $this->fileStorage->is_too_large;
+        $this->isReadOnlyMount = (bool) $this->fileStorage->is_read_only;
         $this->syncData();
         $this->refreshBackupStatus();
     }
@@ -151,6 +154,21 @@ class FileStorage extends Component
         }
 
         return [];
+    }
+
+    public function saveMountAccess(): void
+    {
+        $resource = $this->fileStorage->service;
+        $this->authorize('update', $resource);
+        abort_unless($resource instanceof Application && $resource->build_pack !== 'dockercompose', 422, 'Edit mount access in the Docker Compose file.');
+        $this->validate(['isReadOnlyMount' => 'required|boolean']);
+
+        $this->fileStorage->is_read_only = $this->isReadOnlyMount;
+        $changedFields = auditChangedFields($this->fileStorage);
+        $this->fileStorage->save();
+        $this->auditFileStorageUpdate($changedFields);
+        $this->dispatch('configurationChanged');
+        $this->dispatch('success', 'Mount access updated. Redeploy to apply.');
     }
 
     public function convertToDirectory()

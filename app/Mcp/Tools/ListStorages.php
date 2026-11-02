@@ -16,7 +16,7 @@ class ListStorages extends Tool
 {
     protected string $name = 'list_storages';
 
-    protected string $description = 'List persistent and file storage mounts for an application, database, or service owned by the authenticated team. File contents are never returned.';
+    protected string $description = 'List persistent and file storage mounts for an application, database, or service owned by the authenticated team. Non-Compose application mounts include the is_read_only setting, applied on redeploy. File contents are never returned.';
 
     use BuildsResponse;
     use ResolvesResource;
@@ -58,6 +58,7 @@ class ListStorages extends Tool
                 'mount_path' => $s->mount_path,
                 'host_path' => $s->host_path,
                 'is_directory' => $s->is_directory ?? null,
+                ...($resourceType === 'application' && $resource->build_pack !== 'dockercompose' ? ['is_read_only' => (bool) $s->is_read_only] : []),
             ]));
         }
 
@@ -67,6 +68,7 @@ class ListStorages extends Tool
                 'name' => $s->name ?? null,
                 'mount_path' => $s->mount_path,
                 'is_directory' => $s->is_directory ?? null,
+                ...($resourceType === 'application' && $resource->build_pack !== 'dockercompose' ? ['is_read_only' => (bool) $s->is_read_only] : []),
             ]));
         }
 

@@ -5187,6 +5187,7 @@ class ApplicationsController extends Controller
                             'id' => ['type' => 'integer', 'description' => 'The ID of the storage (deprecated, use uuid instead).'],
                             'type' => ['type' => 'string', 'enum' => ['persistent', 'file'], 'description' => 'The type of storage: persistent or file.'],
                             'is_preview_suffix_enabled' => ['type' => 'boolean', 'description' => 'Whether to add -pr-N suffix for preview deployments.'],
+                            'is_read_only' => ['type' => 'boolean', 'description' => 'Mount read-only inside the application container. Applies after redeployment. Not available for Docker Compose mounts.'],
                             'name' => ['type' => 'string', 'description' => 'The volume name (persistent only, not allowed for read-only storages).'],
                             'mount_path' => ['type' => 'string', 'description' => 'The container mount path (not allowed for read-only storages).'],
                             'content' => ['type' => 'string', 'nullable' => true, 'description' => 'The file content (file only, not allowed for read-only storages). Changing the content needs the deploy permission.'],
@@ -5252,12 +5253,13 @@ class ApplicationsController extends Controller
             'id' => 'integer',
             'type' => 'required|string|in:persistent,file',
             'is_preview_suffix_enabled' => 'boolean',
+            'is_read_only' => 'boolean',
             'name' => ['string', 'regex:'.ValidationPatterns::VOLUME_NAME_PATTERN],
-            'mount_path' => 'string',
+            'mount_path' => ['string', ...($application->build_pack !== 'dockercompose' ? ['not_regex:/:/'] : [])],
             'content' => 'string|nullable',
         ]);
 
-        $allAllowedFields = ['uuid', 'id', 'type', 'is_preview_suffix_enabled', 'name', 'mount_path', 'content'];
+        $allAllowedFields = ['uuid', 'id', 'type', 'is_preview_suffix_enabled', 'is_read_only', 'name', 'mount_path', 'content'];
         $extraFields = array_diff(array_keys($request->all()), $allAllowedFields);
         if ($validator->fails() || ! empty($extraFields)) {
             $errors = $validator->errors();
@@ -5298,8 +5300,12 @@ class ApplicationsController extends Controller
             ], 404);
         }
 
+        if ($request->has('is_read_only') && $application->build_pack === 'dockercompose') {
+            return response()->json(['message' => 'Edit mount access in the Docker Compose file.'], 422);
+        }
+
         $isReadOnly = $storage->shouldBeReadOnlyInUI();
-        $editableOnlyFields = ['name', 'mount_path', 'content'];
+        $editableOnlyFields = ['name', 'mount_path', 'content', 'is_read_only'];
         $requestedEditableFields = array_intersect($editableOnlyFields, array_keys($request->all()));
 
         if ($isReadOnly && ! empty($requestedEditableFields)) {
@@ -5335,6 +5341,9 @@ class ApplicationsController extends Controller
 
         // Only for editable storages
         if (! $isReadOnly) {
+            if ($request->has('is_read_only')) {
+                $storage->is_read_only = $request->boolean('is_read_only');
+            }
             if ($request->type === 'persistent') {
                 if ($request->has('name')) {
                     $storage->name = $request->name;
@@ -5402,6 +5411,7 @@ class ApplicationsController extends Controller
                             'mount_path' => ['type' => 'string', 'description' => 'The container mount path.'],
                             'content' => ['type' => 'string', 'nullable' => true, 'description' => 'File content (file only, optional). Needs the deploy ability when set.'],
                             'is_directory' => ['type' => 'boolean', 'description' => 'Whether this is a directory mount (file only, default false).'],
+                            'is_read_only' => ['type' => 'boolean', 'default' => false, 'description' => 'Mount read-only inside the application container. Not available for Docker Compose mounts.'],
                             'fs_path' => ['type' => 'string', 'description' => 'Host path. Required for directory mounts and host file mounts. Optional for file mounts with content (default: inside the resource directory). An absolute path can be anywhere on the host; a relative path is inside the resource directory. A directory or file mount outside the resource directory needs a token with the deploy permission. Coolify never deletes a path outside the resource directory.'],
                         ],
                         additionalProperties: false,
@@ -5444,14 +5454,15 @@ class ApplicationsController extends Controller
         $validator = customApiValidator($request->all(), [
             'type' => 'required|string|in:persistent,file',
             'name' => ['string', 'regex:'.ValidationPatterns::VOLUME_NAME_PATTERN],
-            'mount_path' => 'required|string',
+            'mount_path' => ['required', 'string', ...($application->build_pack !== 'dockercompose' ? ['not_regex:/:/'] : [])],
             'content' => 'string|nullable',
             'is_directory' => 'boolean',
             'is_host_file' => 'boolean',
+            'is_read_only' => 'boolean',
             'fs_path' => 'string',
         ]);
 
-        $allAllowedFields = ['type', 'name', 'mount_path', 'content', 'is_directory', 'is_host_file', 'fs_path'];
+        $allAllowedFields = ['type', 'name', 'mount_path', 'content', 'is_directory', 'is_host_file', 'is_read_only', 'fs_path'];
         $extraFields = array_diff(array_keys($request->all()), $allAllowedFields);
         if ($validator->fails() || ! empty($extraFields)) {
             $errors = $validator->errors();
@@ -5465,6 +5476,10 @@ class ApplicationsController extends Controller
                 'message' => 'Validation failed.',
                 'errors' => $errors,
             ], 422);
+        }
+
+        if ($request->has('is_read_only') && $application->build_pack === 'dockercompose') {
+            return response()->json(['message' => 'Edit mount access in the Docker Compose file.'], 422);
         }
 
         if ($request->type === 'persistent') {
@@ -5491,6 +5506,7 @@ class ApplicationsController extends Controller
             $storage = LocalPersistentVolume::create([
                 'name' => $application->uuid.'-'.$request->name,
                 'mount_path' => $request->mount_path,
+                'is_read_only' => $request->boolean('is_read_only'),
                 'resource_id' => $application->id,
                 'resource_type' => $application->getMorphClass(),
             ]);
@@ -5552,6 +5568,7 @@ class ApplicationsController extends Controller
                 'is_directory' => true,
                 'resource_id' => $application->id,
                 'resource_type' => get_class($application),
+                'is_read_only' => $request->boolean('is_read_only'),
             ]);
         } elseif ($isHostFile) {
             if (! $request->fs_path) {
@@ -5586,6 +5603,7 @@ class ApplicationsController extends Controller
                 'is_host_file' => true,
                 'resource_id' => $application->id,
                 'resource_type' => get_class($application),
+                'is_read_only' => $request->boolean('is_read_only'),
             ]);
         } else {
             try {
@@ -5633,6 +5651,7 @@ class ApplicationsController extends Controller
                 'is_directory' => false,
                 'resource_id' => $application->id,
                 'resource_type' => get_class($application),
+                'is_read_only' => $request->boolean('is_read_only'),
             ]);
         }
 
