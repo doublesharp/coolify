@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\ResourceSleepPolicy;
 use App\Services\ResourceSleep;
+use App\Services\ScheduledJobDeliveryService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -20,11 +21,16 @@ class ReconcileResourceSleep implements ShouldQueue
 
     public int $tries = 1;
 
+    public int $maxExceptions = 1;
+
+    public int $retryUntil;
+
     public int $timeout = 150;
 
     public function __construct(public ?int $policyId = null, public ?string $action = null)
     {
         $this->onQueue('resource-lifecycle');
+        $this->retryUntil = now()->addHours(ScheduledJobDeliveryService::LATE_RUN_MAX_AGE_HOURS)->timestamp;
     }
 
     public function handle(ResourceSleep $lifecycle): void
@@ -33,6 +39,13 @@ class ReconcileResourceSleep implements ShouldQueue
             $policy = ResourceSleepPolicy::find($this->policyId);
             if ($policy) {
                 try {
+                    if ($this->action === 'wake' && $policy->state !== 'awake' && $lifecycle->activeWork($policy)) {
+                        // Keep an accepted wake queued until the offline backup releases its lease.
+                        Cache::put('resource-sleep-wake-queued:'.$policy->id, true, 240);
+                        $this->release(15);
+
+                        return;
+                    }
                     match ($this->action) {
                         'wake' => $lifecycle->wake($policy),
                         'sleep' => $lifecycle->sleep($policy),
@@ -41,7 +54,7 @@ class ReconcileResourceSleep implements ShouldQueue
                 } catch (LockTimeoutException) {
                     // Another lifecycle operation already owns this resource.
                 } finally {
-                    if ($this->action === 'wake') {
+                    if ($this->action === 'wake' && ! $this->job?->isReleased()) {
                         Cache::forget('resource-sleep-wake-queued:'.$policy->id);
                     }
                 }

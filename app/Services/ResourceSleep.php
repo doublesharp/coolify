@@ -283,8 +283,9 @@ class ResourceSleep
                 }
                 $this->hook($policy, 'before_sleep');
                 foreach (array_reverse($resources) as $resource) {
+                    $timeout = $this->remaining();
                     $possiblyStopped = true;
-                    app(ResourceSleepDocker::class)->stop($server, array_column($containers[$resource->uuid], 'id'), $this->remaining());
+                    app(ResourceSleepDocker::class)->stop($server, array_column($containers[$resource->uuid], 'id'), $timeout);
                 }
                 $policy->update(['state' => 'asleep']);
                 $this->afterHook($policy, 'after_sleep');
@@ -307,6 +308,10 @@ class ResourceSleep
             if ($policy->state === 'awake') {
                 $policy->update(['last_activity_at' => now()]);
 
+                return;
+            }
+            if ($this->activeWork($policy)) {
+                // An offline volume backup must finish before visitors resume its writers.
                 return;
             }
             try {

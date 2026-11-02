@@ -31,6 +31,7 @@ use App\Models\Team;
 use App\Models\User;
 use App\Notifications\VolumeBackup\BackupFailed;
 use App\Notifications\VolumeBackup\BackupSuccess;
+use App\Services\ResourceSleep;
 use App\Services\ScheduledJobDeliveryService;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Filesystem\FilesystemAdapter;
@@ -3026,4 +3027,27 @@ it('shows the backup actions in the header bar on every application backup page'
         expect($this->get($showUrl.$suffix)->assertOk()->getContent())
             ->toMatch('/x-teleport="#resource-action-hud-slot".*?wire:click="toggleEnabled".*?Disable backup.*?wire:click="backupNow"/s');
     }
+});
+
+it('runs a manual volume backup while asleep without starting its retained containers', function () {
+    config(['broadcasting.default' => 'null']);
+    InstanceSettings::unguarded(fn () => InstanceSettings::create(['id' => 0]));
+    $team = Team::factory()->create();
+    [$application, $volume] = createVolumeBackupApplication($team);
+    $policy = app(ResourceSleep::class)->configure($application, ['enabled' => true]);
+    $policy->update(['state' => 'asleep']);
+    $backup = $volume->scheduledBackups()->create(['team_id' => $team->id, 'frequency' => 'daily', 'enabled' => true, 'save_s3' => false, 'stop_during_backup' => true]);
+    fakeRemoteProcesses(['*docker ps -q*' => '', '*du -b*' => '128', '*' => '']);
+    Notification::fake();
+    $job = new VolumeBackupJob($backup);
+    $job->middleware()[0]->handle($job, function ($job) use ($policy) {
+        expect(app(ResourceSleep::class)->activeWork($policy))->toBeTrue();
+        app(ResourceSleep::class)->wake($policy);
+        expect($policy->fresh()->state)->toBe('asleep');
+        $job->handle();
+    });
+    expect($backup->executions()->sole()->status)->toBe('success')
+        ->and($policy->fresh()->state)->toBe('asleep')
+        ->and(app(ResourceSleep::class)->activeWork($policy))->toBeFalse();
+    Process::assertNotRan(fn ($process) => str_contains(remoteProcessScript($process), 'docker start '));
 });
