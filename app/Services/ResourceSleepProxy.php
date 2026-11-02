@@ -1,0 +1,248 @@
+<?php
+
+namespace App\Services;
+
+use App\Actions\Proxy\GetProxyConfiguration;
+use App\Actions\Proxy\SaveProxyConfiguration;
+use App\Enums\ProxyTypes;
+use App\Models\ResourceSleepPolicy;
+use App\Models\Server;
+use Illuminate\Support\Facades\Cache;
+use RuntimeException;
+use Symfony\Component\Yaml\Yaml;
+
+/** A managed file-provider route survives removal from Traefik's Docker provider. */
+class ResourceSleepProxy
+{
+    private const MODULE = 'github.com/coollabsio/resource-sleep';
+
+    public function install(Server $server): void
+    {
+        Cache::lock('resource-sleep-proxy:'.$server->id, 120)->block(5, fn () => $this->installLocked($server));
+    }
+
+    private function installLocked(Server $server): void
+    {
+        if ($server->isSwarm() || $server->proxyType() !== ProxyTypes::TRAEFIK->value) {
+            throw new RuntimeException('Request activity requires Traefik on standalone Docker.');
+        }
+        // Reuse the native proxy configuration, preserving custom flags and mounts.
+        $path = $this->path($server);
+        $configuration = GetProxyConfiguration::run($server);
+        $config = parseProxyComposeYaml($configuration);
+        if (! is_array($config) || ! isset($config['services']['traefik'])) {
+            throw new RuntimeException('Request activity requires a managed Traefik service.');
+        }
+        $files = ['.traefik.yml', 'go.mod', 'resource_sleep.go'];
+        $hash = hash('sha256', implode('', array_map(fn ($file) => file_get_contents(resource_path('proxy/resource-sleep/'.$file)), $files)));
+        $flag = '--experimental.localplugins.resourcesleep.modulename='.self::MODULE;
+        $service = &$config['services']['traefik'];
+        $commands = withoutProxyComposeTags($service['command'] ?? []);
+        if (! is_array($commands)) {
+            throw new RuntimeException('Request activity requires a list of Traefik commands.');
+        }
+        $mount = $path.'/plugins-local:/plugins-local:ro';
+        $volumes = withoutProxyComposeTags($service['volumes'] ?? []);
+        if (! is_array($volumes)) {
+            throw new RuntimeException('Request activity requires a list of proxy volumes.');
+        }
+        if ($server->proxy->get('resource_sleep_plugin_hash') === $hash && in_array($flag, $commands, true) && in_array($mount, $volumes, true)) {
+            return;
+        }
+        $directory = $path.'/plugins-local/src/'.self::MODULE;
+        instant_remote_process(['mkdir -p '.escapeshellarg($directory)], $server, maxAttempts: 1);
+        foreach ($files as $file) {
+            $server->uploadProxyFile($directory.'/'.$file, file_get_contents(resource_path('proxy/resource-sleep/'.$file)));
+        }
+        $service['command'] = updateTaggedProxyComposeList($service['command'] ?? [], fn ($items) => array_values(array_unique([...$items, $flag])), 'Invalid Traefik commands.');
+        $service['volumes'] = updateTaggedProxyComposeList($service['volumes'] ?? [], fn ($items) => array_values([...$items, ...(! in_array($mount, $items, true) ? [$mount] : [])]), 'Invalid proxy volumes.');
+        SaveProxyConfiguration::run($server, Yaml::dump($config, 20, 2, Yaml::DUMP_OBJECT_AS_MAP | Yaml::DUMP_EMPTY_ARRAY_AS_SEQUENCE));
+        instant_remote_process([
+            'docker compose -f '.escapeshellarg($path.'/docker-compose.yml').' up -d --force-recreate --no-deps --wait traefik',
+            ...connectProxyToNetworks($server),
+        ], $server, timeout: 90, maxAttempts: 1);
+        $server->proxy->resource_sleep_plugin_hash = $hash;
+        $server->save();
+    }
+
+    public function prepare(ResourceSleepPolicy $policy, ?array $inventory = null): void
+    {
+        $server = Server::findOrFail($policy->server_id);
+        $this->install($server);
+        $resource = getResourceByUuid($policy->resource_uuid, $policy->team_id);
+        if (! $resource) {
+            throw new RuntimeException('Sleep resource is missing.');
+        }
+        $containers = $inventory[$policy->resource_uuid] ?? app(ResourceSleepDocker::class)->inventory($resource);
+        if ($containers === []) {
+            return;
+        }
+        $raw = instant_remote_process(['docker exec coolify-proxy wget -qO- http://127.0.0.1:8080/api/rawdata'], $server, timeout: 10, maxAttempts: 1);
+        $configuration = $this->configuration($policy, $containers, json_decode($raw ?? '', true, flags: JSON_THROW_ON_ERROR));
+        $this->write($server, $policy, $configuration);
+        $this->waitForRoutes($server, array_keys($configuration['http']['routers']), true);
+        $policy->update(['proxy_snapshot' => $configuration]);
+    }
+
+    public function waitForBackends(ResourceSleepPolicy $policy): void
+    {
+        $commands = ['deadline=$(($(date +%s) + 60))'];
+        foreach ($policy->proxy_snapshot['http']['services'] ?? [] as $service) {
+            foreach ($service['loadBalancer']['servers'] ?? [] as $backend) {
+                $url = parse_url($backend['url']);
+                $host = escapeshellarg($url['host']);
+                $port = (int) ($url['port'] ?? ($url['scheme'] === 'https' ? 443 : 80));
+                $commands = [...$commands,
+                    "until docker exec coolify-proxy nc -z -w 1 $host $port; do",
+                    '    if [ "$(date +%s)" -ge "$deadline" ]; then echo "Resource HTTP port did not become ready" >&2; exit 1; fi',
+                    '    sleep 1',
+                    'done',
+                ];
+            }
+        }
+        instant_remote_process(['bash -c '.escapeshellarg(implode("\n", $commands))], Server::findOrFail($policy->server_id), timeout: 75, maxAttempts: 1);
+    }
+
+    public function remove(ResourceSleepPolicy $policy): void
+    {
+        $server = Server::findOrFail($policy->server_id);
+        $path = $this->path($server).'/dynamic/resource-sleep-'.$policy->resource_uuid.'.yaml';
+        instant_remote_process(['rm -f '.escapeshellarg($path)], $server, maxAttempts: 1);
+        if ($policy->proxy_snapshot) {
+            $this->waitForRoutes($server, array_keys($policy->proxy_snapshot['http']['routers']), false);
+        }
+        $policy->update(['proxy_snapshot' => null]);
+    }
+
+    private function write(Server $server, ResourceSleepPolicy $policy, array $configuration): void
+    {
+        $directory = $this->path($server).'/dynamic';
+        instant_remote_process(['mkdir -p '.escapeshellarg($directory)], $server, maxAttempts: 1);
+        $server->uploadProxyFile($directory.'/resource-sleep-'.$policy->resource_uuid.'.yaml', Yaml::dump($configuration, 30, 2), 0600);
+    }
+
+    /** Clone the effective router and its Docker references, including authentication and TLS. */
+    public function configuration(ResourceSleepPolicy $policy, array $containers, array $raw): array
+    {
+        $http = ['routers' => [], 'services' => [], 'middlewares' => []];
+        $prefix = 'resource-sleep-'.$policy->resource_uuid.'-';
+        $names = [];
+        $addresses = [];
+        foreach ($containers as $container) {
+            $name = ltrim($container['name'], '/');
+            if (! preg_match('/\A[a-zA-Z0-9][a-zA-Z0-9_.-]+\z/D', $name)) {
+                throw new RuntimeException('Invalid container DNS name.');
+            }
+            $addresses[$name] = $name;
+            foreach ($container['networks'] ?? [] as $network) {
+                foreach (['IPAddress', 'GlobalIPv6Address'] as $field) {
+                    if (! empty($network[$field])) {
+                        $addresses[$network[$field]] = $name;
+                    }
+                }
+            }
+            foreach (array_keys($container['labels'] ?? []) as $label) {
+                if (preg_match('/^traefik\.http\.routers\.([^.]+)\./', $label, $match)) {
+                    $names[$match[1].'@docker'] = true;
+                }
+            }
+        }
+        $clean = fn ($object) => array_diff_key($object, array_flip(['status', 'usedBy', 'using', 'serverStatus', 'errors', 'error', 'provider', 'name']));
+        $copy = function (string $type, string $reference) use (&$copy, &$http, $raw, $prefix, $clean, $addresses): string {
+            if (! str_contains($reference, '@')) {
+                $reference .= '@docker';
+            }
+            if (! str_ends_with($reference, '@docker')) {
+                return $reference;
+            }
+            $key = $prefix.substr(hash('sha256', $type.$reference), 0, 20);
+            if (isset($http[$type][$key])) {
+                return $key;
+            }
+            $object = $raw[$type][$reference] ?? null;
+            if (! is_array($object) || ($object['status'] ?? 'enabled') !== 'enabled') {
+                throw new RuntimeException('A resource proxy dependency is unavailable.');
+            }
+            $http[$type][$key] = [];
+            $object = $clean($object);
+            if ($type === 'middlewares' && isset($object['chain']['middlewares'])) {
+                $object['chain']['middlewares'] = array_map(fn ($ref) => $copy('middlewares', $ref), $object['chain']['middlewares']);
+            }
+            if ($type === 'services') {
+                foreach ($object['loadBalancer']['servers'] ?? [] as $index => $backend) {
+                    $url = parse_url($backend['url'] ?? '');
+                    $host = trim($url['host'] ?? '', '[]');
+                    if (! isset($addresses[$host]) || ! in_array($url['scheme'] ?? '', ['http', 'https'], true) || isset($url['user'])) {
+                        throw new RuntimeException('A sleep route must use only the retained resource containers.');
+                    }
+                    $object['loadBalancer']['servers'][$index]['url'] = preg_replace('~^(https?://)\[[^]]+\]|^(https?://)[^/:]+~', '${1}${2}'.$addresses[$host], $backend['url']);
+                }
+                foreach (['weighted.services', 'mirroring.mirrors'] as $path) {
+                    if (data_get($object, $path)) {
+                        data_set($object, $path, array_map(function ($entry) use ($copy) {
+                            $entry['name'] = $copy('services', $entry['name']);
+
+                            return $entry;
+                        }, data_get($object, $path)));
+                    }
+                }
+                if (isset($object['mirroring']['service'])) {
+                    $object['mirroring']['service'] = $copy('services', $object['mirroring']['service']);
+                }
+            }
+            $http[$type][$key] = $object;
+
+            return $key;
+        };
+        $middleware = $prefix.'activity';
+        $baseUrl = rtrim(instanceSettings()->fqdn ?: config('app.url'), '/');
+        $http['middlewares'][$middleware] = ['plugin' => ['resourcesleep' => [
+            'callbackURL' => $baseUrl.'/api/resource-sleep/'.$policy->resource_uuid.'/activity',
+            'token' => $policy->proxy_token, 'timeoutSeconds' => 180,
+        ]]];
+        foreach (array_keys($names) as $name) {
+            $router = $raw['routers'][$name] ?? null;
+            if (! is_array($router) || ($router['status'] ?? '') !== 'enabled') {
+                throw new RuntimeException('Deploy the resource before enabling request activity.');
+            }
+            $router = $clean($router);
+            $router['service'] = $copy('services', $router['service']);
+            $router['middlewares'] = [...array_map(fn ($ref) => $copy('middlewares', $ref), $router['middlewares'] ?? []), $middleware];
+            $router['priority'] = ($router['priority'] ?? strlen($router['rule'])) + 1;
+            $http['routers'][$prefix.substr(hash('sha256', $name), 0, 20)] = $router;
+        }
+        if ($http['routers'] === []) {
+            throw new RuntimeException('Request activity requires a resource with HTTP routes.');
+        }
+
+        return ['http' => $http];
+    }
+
+    private function waitForRoutes(Server $server, array $routers, bool $present): void
+    {
+        for ($attempt = 0; $attempt < 10; $attempt++) {
+            $output = instant_remote_process(['docker exec coolify-proxy wget -qO- http://127.0.0.1:8080/api/rawdata'], $server, timeout: 5, maxAttempts: 1);
+            $raw = json_decode($output ?? '', true, flags: JSON_THROW_ON_ERROR);
+            $ready = true;
+            foreach ($routers as $name) {
+                $loaded = ($raw['routers'][$name.'@file']['status'] ?? null) === 'enabled';
+                $ready = $ready && ($loaded === $present);
+            }
+            if ($ready) {
+                return;
+            }
+            sleep(1);
+        }
+        throw new RuntimeException('The proxy did not apply the resource sleep routes.');
+    }
+
+    private function path(Server $server): string
+    {
+        $path = $server->proxyPath();
+        if (! preg_match('~\A/[a-zA-Z0-9/_.-]+\z~D', $path)) {
+            throw new RuntimeException('Unsupported proxy path.');
+        }
+
+        return $path;
+    }
+}

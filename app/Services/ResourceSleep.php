@@ -28,6 +28,22 @@ class ResourceSleep
         if (! $resource instanceof Application && ! $resource instanceof Service) {
             throw ValidationException::withMessages(['resource' => 'Automatic sleep is available for applications and services.']);
         }
+
+        return Cache::lock('resource-sleep-config:'.$this->server($resource)->id, 300)->block(5, function () use ($resource, $settings) {
+            $policy = ResourceSleepPolicy::where('resource_uuid', $resource->uuid)->first();
+            if ($policy) {
+                return Cache::lock('resource-sleep:'.$policy->id, 300)->block(5, fn () => $this->configureLocked($resource, $settings));
+            }
+
+            return $this->configureLocked($resource, $settings);
+        });
+    }
+
+    private function configureLocked(Model $resource, array $settings): ResourceSleepPolicy
+    {
+        if (! $resource instanceof Application && ! $resource instanceof Service) {
+            throw ValidationException::withMessages(['resource' => 'Automatic sleep is available for applications and services.']);
+        }
         if (array_diff(array_keys($settings), self::SETTINGS)) {
             throw ValidationException::withMessages(['settings' => 'Unknown sleep settings.']);
         }
@@ -41,9 +57,6 @@ class ResourceSleep
             'webhooks' => ['sometimes', 'array:before_sleep,after_sleep,before_wake,after_wake'],
             'webhooks.*' => ['nullable', 'url', new SafeWebhookUrl],
         ])->validate();
-        if ($settings['request_activity'] ?? false) {
-            throw ValidationException::withMessages(['request_activity' => 'Request wake requires the request activity feature.']);
-        }
         $server = $this->server($resource);
         if ($server->isSwarm() || $server->isTransferredAway()) {
             throw ValidationException::withMessages(['resource' => 'Automatic sleep requires an active standalone Docker server.']);
@@ -76,7 +89,18 @@ class ResourceSleep
                 'last_activity_at' => now(), 'woke_at' => now(),
             ]);
         }
+        $wasRequestActivity = $policy->request_activity && $policy->enabled;
         $policy->fill($settings)->save();
+        try {
+            if ($policy->enabled && $policy->request_activity) {
+                app(ResourceSleepProxy::class)->prepare($policy);
+            } elseif ($wasRequestActivity) {
+                app(ResourceSleepProxy::class)->remove($policy);
+            }
+        } catch (Throwable) {
+            $policy->update(['enabled' => false, 'error' => 'Request activity setup failed. Check the proxy and try again.']);
+            throw ValidationException::withMessages(['request_activity' => 'Request activity setup failed. Check the proxy and try again.']);
+        }
 
         return $policy->fresh();
     }
@@ -86,13 +110,26 @@ class ResourceSleep
         $policy = ResourceSleepPolicy::where('enabled', true)
             ->where(fn ($query) => $query->where('resource_uuid', $resource->uuid)->orWhereJsonContains('dependencies', $resource->uuid))->first();
         if ($policy) {
-            $this->wake($policy);
-            $policy->update(['last_activity_at' => now(), 'woke_at' => now()]);
+            $this->wake($policy, $resource->uuid);
+            if ($policy->request_activity) {
+                app(ResourceSleepProxy::class)->remove($policy);
+            }
+            $policy->update(['last_activity_at' => now()->addMinute(), 'woke_at' => now()]);
         }
     }
 
     public function reconcile(ResourceSleepPolicy $policy): void
     {
+        // Keep failed remote cleanup retryable after a resource is deleted, including while asleep.
+        if (! getResourceByUuid($policy->resource_uuid, $policy->team_id)) {
+            $server = Server::find($policy->server_id);
+            if ($policy->request_activity && $server && ! $server->isTransferredAway()) {
+                app(ResourceSleepProxy::class)->remove($policy);
+            }
+            $policy->delete();
+
+            return;
+        }
         $this->sleep($policy, idleOnly: true);
     }
 
@@ -108,15 +145,18 @@ class ResourceSleep
 
                 return;
             }
+            $server = Server::findOrFail($policy->server_id);
+            if (! $server->isFunctional() || $server->isTransferredAway()) {
+                return;
+            }
+            if ($policy->request_activity && ! $policy->proxy_snapshot) {
+                app(ResourceSleepProxy::class)->prepare($policy);
+            }
             if ($idleOnly && ($policy->last_activity_at->addSeconds($policy->idle_timeout_seconds)->isFuture()
                 || $policy->woke_at->addSeconds($policy->minimum_uptime_seconds)->isFuture())) {
                 return;
             }
             if ($this->activeRequests($policy)) {
-                return;
-            }
-            $server = Server::findOrFail($policy->server_id);
-            if (! $server->isFunctional() || $server->isTransferredAway()) {
                 return;
             }
             $resources = $this->resources($policy);
@@ -129,8 +169,22 @@ class ResourceSleep
                 return;
             }
             try {
+                if ($policy->request_activity) {
+                    app(ResourceSleepProxy::class)->prepare($policy, $containers);
+                }
+                $canSleep = Cache::lock('resource-sleep-requests-lock:'.$policy->id, 5)->block(1, function () use ($policy, $containers, $idleOnly) {
+                    $policy->refresh();
+                    if ($this->activeRequests($policy) || ($idleOnly && $policy->last_activity_at->copy()->addSeconds($policy->idle_timeout_seconds)->isFuture())) {
+                        return false;
+                    }
+                    $policy->update(['state' => 'sleeping', 'containers' => $containers, 'error' => null]);
+
+                    return true;
+                });
+                if (! $canSleep) {
+                    return;
+                }
                 $this->hook($policy, 'before_sleep');
-                $policy->update(['state' => 'sleeping', 'containers' => $containers, 'error' => null]);
                 foreach (array_reverse($resources) as $resource) {
                     app(ResourceSleepDocker::class)->stop($server, array_column($containers[$resource->uuid], 'id'));
                 }
@@ -144,9 +198,9 @@ class ResourceSleep
         });
     }
 
-    public function wake(ResourceSleepPolicy $policy): void
+    public function wake(ResourceSleepPolicy $policy, ?string $deploymentResource = null): void
     {
-        Cache::lock('resource-sleep:'.$policy->id, 300)->block(1, function () use ($policy) {
+        Cache::lock('resource-sleep:'.$policy->id, 300)->block(1, function () use ($policy, $deploymentResource) {
             $policy->refresh();
             if (! $policy->enabled) {
                 throw new RuntimeException('Automatic sleep is disabled.');
@@ -165,10 +219,13 @@ class ResourceSleep
                     // A deployment or operator can remove a retained container. Never recreate it here.
                     $owned = array_column(app(ResourceSleepDocker::class)->inventory($resource), 'id');
                     $ids = array_column($saved, 'id');
-                    if (array_diff($ids, $owned)) {
+                    if (array_diff($ids, $owned) && $resource->uuid !== $deploymentResource) {
                         throw new RuntimeException('The retained deployment has changed. Deploy the resource to recover.');
                     }
-                    app(ResourceSleepDocker::class)->start($server, $ids);
+                    app(ResourceSleepDocker::class)->start($server, array_values(array_intersect($ids, $owned)));
+                }
+                if ($policy->request_activity && $policy->proxy_snapshot) {
+                    app(ResourceSleepProxy::class)->waitForBackends($policy);
                 }
                 $this->hook($policy, 'after_wake');
                 $policy->update(['state' => 'awake', 'containers' => null, 'error' => null, 'last_activity_at' => now(), 'woke_at' => now()]);
@@ -182,9 +239,11 @@ class ResourceSleep
     /** Dependencies are started first, and stopped in reverse order after the primary resource. */
     private function resources(ResourceSleepPolicy $policy): array
     {
-        return array_map(function ($uuid) use ($policy) {
+        $primary = getResourceByUuid($policy->resource_uuid, $policy->team_id);
+
+        return array_map(function ($uuid) use ($policy, $primary) {
             $resource = getResourceByUuid($uuid, $policy->team_id);
-            if (! $resource || $this->server($resource)->id !== $policy->server_id || $this->server($resource)->isTransferredAway()) {
+            if (! $primary || ! $resource || $resource->environment_id !== $primary->environment_id || $this->server($resource)->id !== $policy->server_id || $this->server($resource)->isTransferredAway()) {
                 throw new RuntimeException('A sleep resource is missing or has moved to another server.');
             }
 

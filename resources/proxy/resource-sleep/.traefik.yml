@@ -1,0 +1,8 @@
+displayName: Coolify resource sleep
+type: middleware
+import: github.com/coollabsio/resource-sleep
+summary: Wait for a retained Coolify resource to wake and track active HTTP requests.
+testData:
+  callbackURL: http://coolify:8080/api/resource-sleep/example/activity
+  token: example
+  timeoutSeconds: 180

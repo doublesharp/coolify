@@ -1,48 +1,20 @@
 <?php
 
 use App\Jobs\ReconcileResourceSleep;
-use App\Models\Application;
+use App\Livewire\Project\Shared\ResourceSleepSettings;
 use App\Models\ApplicationDeploymentQueue;
-use App\Models\Environment;
-use App\Models\InstanceSettings;
-use App\Models\PrivateKey;
-use App\Models\Project;
 use App\Models\ResourceSleepPolicy;
-use App\Models\Server;
-use App\Models\StandaloneDocker;
-use App\Models\Team;
 use App\Models\User;
 use App\Services\ResourceSleep;
-use App\Services\ResourceSleepDocker;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
-use Mockery\MockInterface;
+use Livewire\Livewire;
+
+require_once __DIR__.'/../Support/ResourceSleep.php';
 
 uses(LazilyRefreshDatabase::class);
-
-function sleepApplication(): Application
-{
-    Storage::fake('ssh-keys');
-    InstanceSettings::unguarded(fn () => InstanceSettings::firstOrCreate(['id' => 0]));
-    $team = Team::factory()->create();
-    $key = PrivateKey::factory()->create(['team_id' => $team->id]);
-    $server = Server::factory()->create(['team_id' => $team->id, 'private_key_id' => $key->id]);
-    $server->settings->update(['is_reachable' => true, 'is_usable' => true]);
-    $destination = StandaloneDocker::where('server_id', $server->id)->firstOrFail();
-    $project = Project::factory()->create(['team_id' => $team->id]);
-    $environment = Environment::factory()->create(['project_id' => $project->id]);
-
-    return Application::factory()->create([
-        'environment_id' => $environment->id,
-        'destination_id' => $destination->id,
-        'destination_type' => StandaloneDocker::class,
-        'fqdn' => 'http://sleep.example.test',
-        'status' => 'running:healthy',
-    ]);
-}
 
 it('stores an opt-in policy with hidden encrypted webhook credentials', function () {
     $application = sleepApplication();
@@ -75,15 +47,6 @@ it('rejects a dependency from another environment without saving a policy', func
         throw $exception;
     }
 })->throws(ValidationException::class, 'same environment');
-
-function sleepDocker(array $containers = []): MockInterface
-{
-    $docker = Mockery::mock(ResourceSleepDocker::class);
-    $docker->shouldReceive('inventory')->andReturn($containers)->byDefault();
-    app()->instance(ResourceSleepDocker::class, $docker);
-
-    return $docker;
-}
 
 it('stops only running containers and resumes the saved deployment without pulling images', function () {
     $application = sleepApplication();
@@ -151,19 +114,6 @@ it('signs outgoing hooks and refuses a non-success response before stopping', fu
         && $request['event'] === 'before_sleep' && $request['resource_uuid'] === $application->uuid);
 });
 
-function sleepToken(Application $application, array $abilities = ['read', 'write', 'deploy']): string
-{
-    $team = $application->environment->project->team;
-    $user = User::factory()->create();
-    $team->members()->attach($user->id, ['role' => 'owner']);
-    session(['currentTeam' => $team]);
-    InstanceSettings::find(0)->update(['is_api_enabled' => true]);
-    $token = $user->createToken('sleep-api-test', $abilities);
-    $token->accessToken->forceFill(['team_id' => $team->id])->save();
-
-    return $token->plainTextToken;
-}
-
 it('requires authentication and deploy ability for incoming lifecycle webhooks', function () {
     $application = sleepApplication();
     app(ResourceSleep::class)->configure($application, ['enabled' => true]);
@@ -187,4 +137,25 @@ it('does not disclose another team resource through lifecycle routes', function 
     $application = sleepApplication();
     $other = sleepApplication();
     $this->withToken(sleepToken($other))->getJson('/api/v1/resources/'.$application->uuid.'/sleep')->assertNotFound();
+});
+
+it('renders and saves sleep settings through the authorized resource component', function () {
+    $application = sleepApplication();
+    sleepToken($application);
+    $user = User::latest('id')->firstOrFail();
+    $this->actingAs($user);
+    Livewire::test(ResourceSleepSettings::class, ['resource' => $application])
+        ->assertSee('Automatic sleep')->set('enabled', true)->set('idleMinutes', 5)->call('save')->assertHasNoErrors();
+    expect(ResourceSleepPolicy::where('resource_uuid', $application->uuid)->firstOrFail()->idle_timeout_seconds)->toBe(300);
+});
+
+it('rejects component changes from a reader', function () {
+    $application = sleepApplication();
+    $team = $application->environment->project->team;
+    $user = User::factory()->create();
+    $team->members()->attach($user->id, ['role' => 'member']);
+    session(['currentTeam' => $team]);
+    $this->actingAs($user);
+    Livewire::test(ResourceSleepSettings::class, ['resource' => $application])->set('enabled', true)->call('save')->assertForbidden();
+    expect(ResourceSleepPolicy::count())->toBe(0);
 });
