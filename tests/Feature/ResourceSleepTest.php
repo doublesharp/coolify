@@ -8,7 +8,9 @@ use App\Jobs\ReconcileResourceSleep;
 use App\Livewire\Project\Shared\ResourceSleepSettings;
 use App\Models\ApplicationDeploymentQueue;
 use App\Models\ResourceSleepPolicy;
+use App\Models\Server;
 use App\Models\Service;
+use App\Models\StandaloneDocker;
 use App\Models\User;
 use App\Services\ResourceSleep;
 use App\Services\ServerTransfer\ServerTransferExporter;
@@ -294,4 +296,26 @@ it('does not stop containers when a request arrives during its sleep decision', 
     $docker->shouldNotReceive('stop');
     $lifecycle->sleep($policy);
     expect($policy->fresh()->state)->toBe('awake');
+});
+
+it('leaves the resource awake when another server is added after enabling sleep', function () {
+    $application = sleepApplication();
+    $policy = app(ResourceSleep::class)->configure($application, ['enabled' => true]);
+    $server = $application->destination->server;
+    $extra = Server::factory()->create(['team_id' => $server->team_id, 'private_key_id' => $server->private_key_id]);
+    $application->additional_servers()->attach($extra->id, ['standalone_docker_id' => StandaloneDocker::where('server_id', $extra->id)->value('id')]);
+    $docker = sleepDocker();
+    $docker->shouldNotReceive('stop');
+    app(ResourceSleep::class)->sleep($policy);
+    expect($policy->fresh()->state)->toBe('awake')->and($policy->fresh()->error)->not->toBeNull();
+});
+
+it('preserves the completed sleep when its after-sleep receiver fails', function () {
+    $application = sleepApplication();
+    $policy = app(ResourceSleep::class)->configure($application, ['enabled' => true, 'webhooks' => ['after_sleep' => 'https://8.8.8.8/hook']]);
+    Http::fake(['https://8.8.8.8/hook' => Http::response('', 503)]);
+    $docker = sleepDocker([['id' => str_repeat('a', 64), 'state' => ['Running' => true]]]);
+    $docker->shouldReceive('stop')->once();
+    app(ResourceSleep::class)->sleep($policy);
+    expect($policy->fresh()->state)->toBe('asleep')->and($policy->fresh()->error)->toContain('after_sleep');
 });
