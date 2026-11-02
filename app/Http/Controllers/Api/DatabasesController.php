@@ -258,19 +258,7 @@ class DatabasesController extends Controller
             $this->hideNestedServerSecrets($database, $loadNestedServerSecrets);
         }
 
-        $payload = serializeApiResponse($database);
-
-        // A locked password variable is never shown again, also not inside the connection URLs.
-        if (request()->attributes->get('can_read_sensitive', false) === true
-            && method_exists($database, 'isCredentialLocked') && $database->isCredentialLocked()) {
-            foreach (['internal_db_url', 'external_db_url'] as $key) {
-                if ($payload->has($key)) {
-                    $payload->put($key, null);
-                }
-            }
-        }
-
-        return $payload;
+        return redactLockedApiResourceValues($database, serializeApiResponse($database));
     }
 
     private function hideNestedServerSecrets(Model $model, bool $loadRelations = false): void
@@ -2166,9 +2154,6 @@ class DatabasesController extends Controller
             return invalidTokenResponse();
         }
 
-        // Use a generic authorization for database creation - using PostgreSQL as representative model
-        $this->authorize('create', StandalonePostgresql::class);
-
         if ($request->boolean('instant_deploy')) {
             abort_unless($request->user()->tokenCan('deploy') || $request->user()->tokenCan('root'), 403, 'Missing required permissions: deploy');
         }
@@ -2213,6 +2198,8 @@ class DatabasesController extends Controller
         if (! $environment) {
             return response()->json(['message' => 'You need to provide a valid environment_name or environment_uuid.'], 422);
         }
+        // StandalonePostgresql stands for every database type: they share one policy.
+        $this->authorize('create', [StandalonePostgresql::class, $environment]);
         $server = Server::whereTeamId($teamId)->whereUuid($serverUuid)->first();
         if (! $server) {
             return response()->json(['message' => 'Server not found.'], 404);
@@ -3082,7 +3069,7 @@ class DatabasesController extends Controller
             return response()->json(['message' => 'Database not found.'], 404);
         }
 
-        $this->authorize('update', $database);
+        $this->authorize('delete', $database);
 
         // Find the backup configuration by its UUID
         $backup = ScheduledDatabaseBackup::ownedByCurrentTeamAPI($teamId)->where('database_id', $database->id)->where('database_type', $database->getMorphClass())
@@ -3218,7 +3205,7 @@ class DatabasesController extends Controller
             return response()->json(['message' => 'Database not found.'], 404);
         }
 
-        $this->authorize('update', $database);
+        $this->authorize('delete', $database);
 
         // Find the backup configuration by its UUID
         $backup = ScheduledDatabaseBackup::ownedByCurrentTeamAPI($teamId)->where('database_id', $database->id)->where('database_type', $database->getMorphClass())
@@ -5012,7 +4999,7 @@ class DatabasesController extends Controller
             return response()->json(['message' => 'Database not found.'], 404);
         }
 
-        $this->authorize('update', $database);
+        $this->authorize('delete', $database);
 
         $storageUuid = $request->route('storage_uuid');
 
@@ -5269,6 +5256,7 @@ class DatabasesController extends Controller
         }
 
         $this->authorize('update', $database);
+        $this->authorize('create', [StandalonePostgresql::class, $database->environment]);
 
         if ($request->boolean('clone_volumes') && $response = $this->deployAbilityForbiddenResponse($request, 'Cloning volume data stops and starts the source resource, so it needs a token with the deploy permission.')) {
             return $response;

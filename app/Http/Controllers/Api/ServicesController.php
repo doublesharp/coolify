@@ -18,6 +18,7 @@ use App\Models\ServiceApplication;
 use App\Models\StandaloneDocker;
 use App\Models\SwarmDocker;
 use App\Services\Dns\ManagedDnsRecordCleanup;
+use App\Services\Dns\ResourceDnsRecords;
 use App\Support\ValidationPatterns;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
@@ -78,12 +79,7 @@ class ServicesController extends Controller
             $service->makeHidden(['value', 'real_value']);
         }
 
-        $payload = serializeApiResponse($service);
-        if ($service instanceof Service && filled(data_get($payload, 'docker_compose'))) {
-            $payload['docker_compose'] = redactLockedValuesInGeneratedCompose($payload['docker_compose'], $service);
-        }
-
-        return $payload;
+        return redactLockedApiResourceValues($service, serializeApiResponse($service));
     }
 
     /**
@@ -404,8 +400,6 @@ class ServicesController extends Controller
             return invalidTokenResponse();
         }
 
-        $this->authorize('create', Service::class);
-
         if ($request->boolean('instant_deploy')) {
             abort_unless($request->user()->tokenCan('deploy') || $request->user()->tokenCan('root'), 403, 'Missing required permissions: deploy');
         }
@@ -488,6 +482,7 @@ class ServicesController extends Controller
         if (! $environment) {
             return response()->json(['message' => 'Environment not found.'], 404);
         }
+        $this->authorize('create', [Service::class, $environment]);
         $server = Server::whereTeamId($teamId)->whereUuid($serverUuid)->first();
         if (! $server) {
             return response()->json(['message' => 'Server not found.'], 404);
@@ -697,6 +692,7 @@ class ServicesController extends Controller
             if (! $environment) {
                 return response()->json(['message' => 'Environment not found.'], 404);
             }
+            $this->authorize('create', [Service::class, $environment]);
             $server = Server::whereTeamId($teamId)->whereUuid($serverUuid)->first();
             if (! $server) {
                 return response()->json(['message' => 'Server not found.'], 404);
@@ -1342,6 +1338,7 @@ class ServicesController extends Controller
         }
         // URLs of some containers can be saved before a later container fails, so release before any error response.
         $this->queueReleaseOfRemovedServiceHostnames($service, $previousDnsHostnames, (int) $teamId);
+        app(ResourceDnsRecords::class)->queueAutomaticRecords($service, array_merge(...array_values($previousDnsHostnames)));
         if ($urlResult !== null) {
             if (isset($urlResult['errors'])) {
                 return response()->json([
@@ -1487,7 +1484,6 @@ class ServicesController extends Controller
                         properties: [
                             'key' => ['type' => 'string', 'description' => 'The key of the environment variable.'],
                             'value' => ['type' => 'string', 'description' => 'The value of the environment variable.'],
-                            'is_preview' => ['type' => 'boolean', 'description' => 'The flag to indicate if the environment variable is used in preview deployments.'],
                             'is_literal' => ['type' => 'boolean', 'description' => 'The flag to indicate if the environment variable is a literal, nothing espaced.'],
                             'is_multiline' => ['type' => 'boolean', 'description' => 'The flag to indicate if the environment variable is multiline.'],
                             'is_shown_once' => ['type' => 'boolean', 'description' => 'If true, the saved value is hidden in the UI and API responses. MCP never returns environment variable values.'],
@@ -1631,7 +1627,6 @@ class ServicesController extends Controller
                                     properties: [
                                         'key' => ['type' => 'string', 'description' => 'The key of the environment variable.'],
                                         'value' => ['type' => 'string', 'description' => 'The value of the environment variable.'],
-                                        'is_preview' => ['type' => 'boolean', 'description' => 'The flag to indicate if the environment variable is used in preview deployments.'],
                                         'is_literal' => ['type' => 'boolean', 'description' => 'The flag to indicate if the environment variable is a literal, nothing espaced.'],
                                         'is_multiline' => ['type' => 'boolean', 'description' => 'The flag to indicate if the environment variable is multiline.'],
                                         'is_shown_once' => ['type' => 'boolean', 'description' => 'If true, the saved value is hidden in the UI and API responses. MCP never returns environment variable values.'],
@@ -1764,7 +1759,6 @@ class ServicesController extends Controller
                     properties: [
                         'key' => ['type' => 'string', 'description' => 'The key of the environment variable.'],
                         'value' => ['type' => 'string', 'description' => 'The value of the environment variable.'],
-                        'is_preview' => ['type' => 'boolean', 'description' => 'The flag to indicate if the environment variable is used in preview deployments.'],
                         'is_literal' => ['type' => 'boolean', 'description' => 'The flag to indicate if the environment variable is a literal, nothing espaced.'],
                         'is_multiline' => ['type' => 'boolean', 'description' => 'The flag to indicate if the environment variable is multiline.'],
                         'is_shown_once' => ['type' => 'boolean', 'description' => 'If true, the saved value is hidden in the UI and API responses. MCP never returns environment variable values.'],
@@ -3046,7 +3040,7 @@ class ServicesController extends Controller
             return response()->json(['message' => 'Service not found.'], 404);
         }
 
-        $this->authorize('update', $service);
+        $this->authorize('delete', $service);
 
         $storageUuid = $request->route('storage_uuid');
 
@@ -3324,6 +3318,7 @@ class ServicesController extends Controller
         }
 
         $this->authorize('update', $service);
+        $this->authorize('create', [Service::class, $service->environment]);
 
         if ($request->boolean('clone_volumes') && $response = $this->deployAbilityForbiddenResponse($request, 'Cloning volume data stops and starts the source resource, so it needs a token with the deploy permission.')) {
             return $response;
