@@ -4,11 +4,13 @@ namespace App\Models;
 
 use App\Casts\EncryptedArrayCast;
 use App\Enums\ApplicationDeploymentStatus;
+use App\Services\Access\AccessResolver;
 use App\Services\Security\SensitiveDataRedactor;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use OpenApi\Attributes as OA;
@@ -49,6 +51,20 @@ use OpenApi\Attributes as OA;
 )]
 class ApplicationDeploymentQueue extends Model
 {
+    /**
+     * Only deployments of applications the authenticated member or API token can see.
+     */
+    public function scopeVisibleToCurrentActor(Builder $query): Builder
+    {
+        foreach (app(AccessResolver::class)->currentLayers() as $layer) {
+            if (! $layer->coversWholeTeam()) {
+                return $query->whereIn('application_id', Application::query()->pluck('id')->map(fn ($id) => (string) $id));
+            }
+        }
+
+        return $query;
+    }
+
     /**
      * Log redaction variants of remote secrets. Kept in memory only, never saved.
      *
@@ -166,13 +182,23 @@ class ApplicationDeploymentQueue extends Model
      */
     public function scopeOwnedByTeam(Builder $query, int $teamId): Builder
     {
-        // application_id is varchar; whereHas joins to applications.id (bigint) and breaks on PostgreSQL.
-        $applicationIds = Application::withTrashed()
+        return $query->whereIn('application_id', self::applicationIdsOwnedByTeam($teamId));
+    }
+
+    /**
+     * IDs of the team's applications, deleted ones included, as strings to match application_id.
+     *
+     * application_id is varchar; whereHas joins to applications.id (bigint) and breaks on PostgreSQL.
+     *
+     * @return Collection<int, string>
+     */
+    public static function applicationIdsOwnedByTeam(int $teamId): Collection
+    {
+        return Application::withTrashed()
+            ->withoutGlobalScope('withRelations')
             ->whereRelation('environment.project.team', 'id', $teamId)
             ->pluck('id')
             ->map(fn ($id) => (string) $id);
-
-        return $query->whereIn('application_id', $applicationIds);
     }
 
     public function server(): Attribute
