@@ -47,7 +47,7 @@ class ResourceSleepDocker
         $containers = implode(' ', $ids);
         $health = escapeshellarg('{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{else}}healthy{{end}}');
         // One remote call, a bounded wait, and no background processes on the host.
-        instant_remote_process([
+        $commands = [
             "docker start $containers",
             "for container in $containers; do",
             '    ready=false',
@@ -59,7 +59,8 @@ class ResourceSleepDocker
             '    done',
             '    if [ "$ready" != true ]; then echo "Container did not become healthy" >&2; exit 1; fi',
             'done',
-        ], $server, timeout: 180, maxAttempts: 1);
+        ];
+        instant_remote_process(['bash -c '.escapeshellarg(implode("\n", $commands))], $server, timeout: 180, maxAttempts: 1);
     }
 
     private function ids(array $ids): array
