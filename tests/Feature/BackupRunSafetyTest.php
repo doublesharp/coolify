@@ -26,6 +26,7 @@ use App\Support\DatabaseOperationReservation;
 use App\Support\ResourceStartActivity;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\TimeoutExceededException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -129,7 +130,7 @@ it('skips a database backup occurrence when the previous run still holds the ove
     $backup = backupRunSafetySchedule($database, $this->team);
     $occurrence = backupRunSafetyOccurrence("scheduled-backup:{$backup->id}", 'database-backup', $backup->id);
     $job = new DatabaseBackupJob($backup, $occurrence->uuid);
-    $runningBackupLock = Cache::lock($job->middleware()[0]->getLockKey($job), 3600);
+    $runningBackupLock = Cache::lock(collect($job->middleware())->first(fn ($middleware) => $middleware instanceof WithoutOverlapping)->getLockKey($job), 3600);
     $runningBackupLock->get();
     $commands = backupRunSafetyFakeRemoteCommands();
 

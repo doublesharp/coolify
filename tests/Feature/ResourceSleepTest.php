@@ -3,20 +3,26 @@
 use App\Actions\CoolifyTask\RunRemoteProcess;
 use App\Jobs\ApplicationDeploymentJob;
 use App\Jobs\CoolifyTask;
+use App\Jobs\DatabaseBackupJob;
 use App\Jobs\Middleware\ResourceSleepWork;
 use App\Jobs\ReconcileResourceSleep;
 use App\Livewire\Project\Shared\ResourceSleepSettings;
 use App\Models\ApplicationDeploymentQueue;
 use App\Models\ResourceSleepPolicy;
+use App\Models\ScheduledDatabaseBackup;
+use App\Models\ScheduledJobDelivery;
 use App\Models\Server;
 use App\Models\Service;
 use App\Models\StandaloneDocker;
+use App\Models\StandalonePostgresql;
 use App\Models\User;
+use App\Notifications\Database\BackupFailed;
 use App\Services\ResourceSleep;
 use App\Services\ServerTransfer\ServerTransferExporter;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
@@ -318,4 +324,101 @@ it('preserves the completed sleep when its after-sleep receiver fails', function
     $docker->shouldReceive('stop')->once();
     app(ResourceSleep::class)->sleep($policy);
     expect($policy->fresh()->state)->toBe('asleep')->and($policy->fresh()->error)->toContain('after_sleep');
+});
+
+it('retains a manual database backup until its sleeping dependency is ready', function () {
+    $application = sleepApplication();
+    $database = StandalonePostgresql::create(['name' => 'sleep-backup-database', 'postgres_password' => 'test-only-password', 'environment_id' => $application->environment_id, 'destination_id' => $application->destination_id, 'destination_type' => $application->destination_type, 'status' => 'running:healthy']);
+    $backup = ScheduledDatabaseBackup::create(['database_id' => $database->id, 'database_type' => $database::class, 'team_id' => $application->environment->project->team_id, 'frequency' => 'daily', 'save_s3' => false]);
+    $policy = app(ResourceSleep::class)->configure($application, ['enabled' => true, 'dependencies' => [$database->uuid]]);
+    $policy->update(['state' => 'asleep']);
+    Queue::fake([ReconcileResourceSleep::class]);
+    $job = (new DatabaseBackupJob($backup))->withFakeQueueInteractions();
+    $ran = false;
+    $next = function () use (&$ran, $policy) {
+        $ran = true;
+        expect(app(ResourceSleep::class)->activeWork($policy))->toBeTrue();
+    };
+    $job->middleware()[0]->handle($job, $next);
+    $job->assertReleased(15);
+    expect($ran)->toBeFalse();
+    Queue::assertPushed(ReconcileResourceSleep::class, fn ($wake) => $wake->policyId === $policy->id && $wake->action === 'wake');
+    expect($job->retryUntil)->toBeGreaterThan(now()->addMinutes(5)->timestamp);
+    $policy->update(['state' => 'awake']);
+    $database->update(['status' => 'exited']);
+    $job->middleware()[0]->handle($job, $next);
+    expect($ran)->toBeFalse();
+    $database->update(['status' => 'running:healthy']);
+    $job->middleware()[0]->handle($job, $next);
+    expect($job->backup->database->status)->toBe('running:healthy');
+    expect($ran)->toBeTrue()->and(app(ResourceSleep::class)->activeWork($policy))->toBeFalse();
+});
+
+it('reports a failed wake for a queued backup and preserves its scheduled failure record', function () {
+    $application = sleepApplication();
+    $database = StandalonePostgresql::create(['name' => 'sleep-backup-database', 'postgres_password' => 'test-only-password', 'environment_id' => $application->environment_id, 'destination_id' => $application->destination_id, 'destination_type' => $application->destination_type, 'status' => 'running:healthy']);
+    $team = $application->environment->project->team;
+    $team->emailNotificationSettings->update(['smtp_enabled' => true, 'backup_failure_email_notifications' => true]);
+    $backup = ScheduledDatabaseBackup::create(['database_id' => $database->id, 'database_type' => $database::class, 'team_id' => $team->id, 'frequency' => 'daily', 'save_s3' => false]);
+    $occurrence = ScheduledJobDelivery::create(['schedule_key' => 'database-backup-'.$backup->id, 'job_type' => 'database-backup', 'resource_id' => $backup->id, 'scheduled_for' => now(), 'status' => 'enqueued', 'payload' => []]);
+    $policy = app(ResourceSleep::class)->configure($application, ['enabled' => true, 'dependencies' => [$database->uuid]]);
+    $policy->update(['state' => 'error']);
+    $job = new DatabaseBackupJob($backup, $occurrence->uuid);
+    Notification::fake();
+    try {
+        $job->middleware()[0]->handle($job, fn () => test()->fail('Backup ran before wake recovered.'));
+        test()->fail('Expected a visible failure.');
+    } catch (RuntimeException $exception) {
+        $job->failed($exception);
+    }
+    expect($occurrence->fresh()->status)->toBe('failed')
+        ->and($backup->executions()->sole()->status)->toBe('failed');
+    Notification::assertSentTo($team, BackupFailed::class);
+});
+
+it('keeps backup deferrals retryable beyond one attempt without extending their deadline', function () {
+    $application = sleepApplication();
+    $database = StandalonePostgresql::create(['name' => 'sleep-backup-database', 'postgres_password' => 'test-only-password', 'environment_id' => $application->environment_id, 'destination_id' => $application->destination_id, 'destination_type' => $application->destination_type, 'status' => 'running:healthy']);
+    $backup = ScheduledDatabaseBackup::create(['database_id' => $database->id, 'database_type' => $database::class, 'team_id' => $application->environment->project->team_id, 'frequency' => 'daily', 'save_s3' => false]);
+    $job = new DatabaseBackupJob($backup);
+    $deadline = $job->retryUntil;
+    $this->travel(30)->seconds();
+    $occurrence = ScheduledJobDelivery::create(['schedule_key' => 'database-backup-'.$backup->id, 'job_type' => 'database-backup', 'resource_id' => $backup->id, 'scheduled_for' => now()->subHours(23), 'status' => 'enqueued', 'payload' => []]);
+    expect((new DatabaseBackupJob($backup, $occurrence->uuid))->retryUntil)->toBe(now()->addHour()->timestamp);
+    $copy = unserialize(serialize($job));
+    expect(app('queue')->connection('sync')->getJobExpiration($copy))->toBe($deadline)
+        ->and($copy->maxExceptions)->toBe(1);
+});
+
+it('stays awake if its budget expires before the first stop command', function () {
+    $application = sleepApplication();
+    $lifecycle = app(ResourceSleep::class);
+    $policy = $lifecycle->configure($application, ['enabled' => true, 'webhooks' => ['before_sleep' => 'https://8.8.8.8/hook']]);
+    Http::fake(function () use ($lifecycle) {
+        (new ReflectionProperty(ResourceSleep::class, 'deadline'))->setValue($lifecycle, microtime(true) - 1);
+
+        return Http::response('', 200);
+    });
+    $docker = sleepDocker([['id' => str_repeat('a', 64), 'state' => ['Running' => true]]]);
+    $docker->shouldNotReceive('stop');
+    expect(fn () => $lifecycle->sleep($policy))->toThrow(RuntimeException::class);
+    expect($policy->fresh()->state)->toBe('awake')->and($policy->fresh()->containers)->toBeNull();
+});
+
+it('retains an accepted wake until the offline backup releases its lease', function () {
+    $application = sleepApplication();
+    $lifecycle = app(ResourceSleep::class);
+    $policy = $lifecycle->configure($application, ['enabled' => true]);
+    $id = str_repeat('a', 64);
+    $policy->update(['state' => 'asleep', 'containers' => [$application->uuid => [['id' => $id]]]]);
+    Cache::put('resource-sleep-work:'.$policy->id, ['backup' => now()->addMinute()->timestamp], 60);
+    $job = (new ReconcileResourceSleep($policy->id, 'wake'))->withFakeQueueInteractions();
+    $job->handle($lifecycle);
+    $job->assertReleased(15);
+    expect($policy->fresh()->state)->toBe('asleep')->and(Cache::has('resource-sleep-wake-queued:'.$policy->id))->toBeTrue();
+    Cache::forget('resource-sleep-work:'.$policy->id);
+    $docker = sleepDocker([['id' => $id, 'state' => ['Running' => false]]]);
+    $docker->shouldReceive('start')->once();
+    (new ReconcileResourceSleep($policy->id, 'wake'))->handle($lifecycle);
+    expect($policy->fresh()->state)->toBe('awake')->and(Cache::has('resource-sleep-wake-queued:'.$policy->id))->toBeFalse();
 });
