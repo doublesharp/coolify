@@ -154,10 +154,24 @@ class SentinelMetricsClient
             return [];
         }
 
-        // Disk history interleaves every mount; keep the root filesystem only.
+        // Containerized Sentinel sees the host root through its explicit read-only mount.
         if ($rootOnly && array_any($rows, fn ($row) => array_key_exists('mount', $row))) {
             $mount = self::rootMountName($rows);
-            $rows = array_filter($rows, fn ($row) => ($row['mount'] ?? null) === $mount);
+            if (in_array($mount, ['/', '/host-root'], true)) {
+                $roots = [];
+                foreach ($rows as $row) {
+                    if (! in_array($row['mount'] ?? null, ['/', '/host-root'], true)) {
+                        continue;
+                    }
+                    $time = (string) ($row['time'] ?? 0);
+                    if (! isset($roots[$time]) || $row['mount'] === '/host-root') {
+                        $roots[$time] = $row;
+                    }
+                }
+                $rows = array_values($roots);
+            } else {
+                $rows = array_filter($rows, fn ($row) => ($row['mount'] ?? null) === $mount);
+            }
         }
 
         // Average samples into epoch-aligned buckets so every server shares the same
@@ -177,7 +191,7 @@ class SentinelMetricsClient
     }
 
     /**
-     * The mount that stands for the root disk: `/`, else the disk that holds /data/coolify.
+     * Prefer the explicit host root, then `/`, else the disk that holds /data/coolify.
      * Sentinel runs in a container and reports only the disks of its own mounts:
      * 1.1.2 and older as `/app/db`, 1.1.3 and newer by host mount point, which is
      * `/data` or `/data/coolify` when that directory is on its own disk.
@@ -188,7 +202,7 @@ class SentinelMetricsClient
     {
         $mounts = array_column($rows, 'mount');
 
-        return collect(['/', '/app/db', '/data/coolify', '/data'])->first(fn ($mount) => in_array($mount, $mounts, true));
+        return collect(['/host-root', '/', '/app/db', '/data/coolify', '/data'])->first(fn ($mount) => in_array($mount, $mounts, true));
     }
 
     /**
