@@ -19,6 +19,7 @@
                 <livewire:project.application.swarm :application="$application" />
             @elseif ($currentRoute === 'project.application.advanced')
                 <livewire:project.application.advanced :application="$application" />
+                <livewire:project.shared.resource-sleep-settings :resource="$application" />
             @elseif ($currentRoute === 'project.application.environment-variables')
                 <livewire:project.shared.environment-variable.all :resource="$application" />
                 <livewire:project.shared.secret-manager-links :resource="$application" />

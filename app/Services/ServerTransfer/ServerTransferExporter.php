@@ -19,6 +19,7 @@ use App\Models\ManagedDnsRecord;
 use App\Models\ManagedDnsRecordReference;
 use App\Models\PrivateKey;
 use App\Models\Project;
+use App\Models\ResourceSleepPolicy;
 use App\Models\S3Storage;
 use App\Models\ScheduledDatabaseBackup;
 use App\Models\ScheduledTask;
@@ -951,6 +952,7 @@ class ServerTransferExporter
             'tags' => $this->exportTags($application->tags),
             'previews' => $this->exportPreviews($application->previews),
             'secret_manager_link' => $this->exportSecretManagerLink($application),
+            'sleep_policy' => ResourceSleepPolicy::where('resource_uuid', $application->uuid)->first()?->configuration(),
             'source' => $source,
             'private_key_uuid' => $application->private_key?->uuid,
             'had_git_source' => filled($application->source_id),
@@ -1075,6 +1077,7 @@ class ServerTransferExporter
             'scheduled_tasks' => $this->exportScheduledTasks($service->scheduled_tasks()->get()),
             'tags' => $this->exportTags($service->tags),
             'secret_manager_link' => $this->exportSecretManagerLink($service),
+            'sleep_policy' => ResourceSleepPolicy::where('resource_uuid', $service->uuid)->first()?->configuration(),
             'applications' => $service->applications
                 ->map(fn ($app) => $this->exportServiceApplication($app))
                 ->values()

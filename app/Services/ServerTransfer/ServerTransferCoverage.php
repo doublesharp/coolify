@@ -36,6 +36,7 @@ use App\Models\Project;
 use App\Models\ProjectSetting;
 use App\Models\PushoverNotificationSettings;
 use App\Models\ResourceLink;
+use App\Models\ResourceSleepPolicy;
 use App\Models\S3Storage;
 use App\Models\ScheduledDatabaseBackup;
 use App\Models\ScheduledDatabaseBackupExecution;
@@ -91,6 +92,7 @@ final class ServerTransferCoverage
      * @var array<class-string, list<string>>
      */
     public const TRANSFERRED = [
+        ResourceSleepPolicy::class => ['projects.*.environments.*.applications.*.sleep_policy', 'projects.*.environments.*.services.*.sleep_policy'],
         Server::class => ['server'],
         ServerSetting::class => ['server.settings'],
         PrivateKey::class => ['private_key', 'private_keys.*'],
@@ -176,6 +178,11 @@ final class ServerTransferCoverage
      * @var array<class-string, array<string, string>>
      */
     public const NOT_EXPORTED_COLUMNS = [
+        ResourceSleepPolicy::class => [
+            'resource_uuid' => self::LINKED, 'server_id' => self::LINKED, 'team_id' => self::TEAM,
+            'proxy_token' => self::RUNTIME, 'state' => self::RUNTIME, 'last_activity_at' => self::RUNTIME,
+            'woke_at' => self::RUNTIME, 'containers' => self::RUNTIME, 'proxy_snapshot' => self::RUNTIME, 'error' => self::RUNTIME,
+        ],
         Server::class => [
             'team_id' => self::TEAM, 'private_key_id' => self::LINKED, 'cloud_provider_token_id' => self::LINKED,
             'unreachable_count' => self::RUNTIME, 'high_disk_usage_notification_sent' => self::RUNTIME,

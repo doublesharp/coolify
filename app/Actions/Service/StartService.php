@@ -9,6 +9,7 @@ use App\Models\LocalFileVolume;
 use App\Models\Service;
 use App\Models\ServiceApplication;
 use App\Models\ServiceDatabase;
+use App\Services\ResourceSleep;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Lorisleiva\Actions\Concerns\AsAction;
@@ -25,6 +26,7 @@ class StartService
 
     public function handle(Service $service, bool $pullLatestImages = false, bool $stopBeforeStart = false)
     {
+        app(ResourceSleep::class)->deployment($service);
         $service->parse();
         self::queueFileStorageSync($service);
         // Fetch remote secrets before stopping: if the secret manager fails, the service keeps running.

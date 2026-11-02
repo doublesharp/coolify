@@ -42,6 +42,7 @@ use App\Models\SwarmDocker;
 use App\Models\Tag;
 use App\Models\Team;
 use App\Models\User;
+use App\Services\ResourceSleep;
 use App\Services\ServerTransfer\ServerTransferCoverage;
 use App\Services\ServerTransfer\ServerTransferExporter;
 use Illuminate\Database\Eloquent\Model;
@@ -146,6 +147,7 @@ beforeEach(function () {
     Application::factory()->create([...$onDestination, 'source_type' => GitlabApp::class, 'source_id' => $gitlabApp->id]);
     $giteaApp = transferCoverageRecord(GiteaApp::class, [...$teamId, 'is_system_wide' => false]);
     Application::factory()->create([...$onDestination, 'source_type' => GiteaApp::class, 'source_id' => $giteaApp->id]);
+    app(ResourceSleep::class)->configure($application, ['enabled' => false]);
     $preview = transferCoverageRecord(ApplicationPreview::class, ['application_id' => $application->id]);
 
     $s3 = transferCoverageRecord(S3Storage::class, $teamId);
