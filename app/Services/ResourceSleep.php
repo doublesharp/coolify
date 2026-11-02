@@ -68,6 +68,8 @@ class ResourceSleep
                 }
             }
 
+            $existing->update(['request_activity' => false]);
+
             return $existing->fresh();
         }
         $settings = Validator::make($settings, [

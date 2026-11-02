@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
 
@@ -22,7 +23,14 @@ type Config struct {
 
 func CreateConfig() *Config { return &Config{TimeoutSeconds: 180} }
 
+type callbackError struct{ status int }
+
+func (e callbackError) Error() string { return "lifecycle callback rejected" }
+
 type middleware struct {
+	mu          sync.Mutex
+	awake       bool
+	heartbeat   time.Duration
 	next        http.Handler
 	callbackURL string
 	token       string
@@ -36,7 +44,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		return nil, fmt.Errorf("invalid resource sleep callback configuration")
 	}
 	return &middleware{next: next, callbackURL: config.CallbackURL, token: config.Token, timeout: time.Duration(config.TimeoutSeconds) * time.Second,
-		client: &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+		heartbeat: 20 * time.Second, client: &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 func (m *middleware) call(ctx context.Context, id, phase string) (bool, error) {
@@ -56,7 +64,7 @@ func (m *middleware) call(ctx context.Context, id, phase string) (bool, error) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
-		return false, fmt.Errorf("lifecycle callback rejected")
+		return false, callbackError{status: response.StatusCode}
 	}
 	var state struct {
 		Ready bool `json:"ready"`
@@ -64,6 +72,9 @@ func (m *middleware) call(ctx context.Context, id, phase string) (bool, error) {
 	if err := json.NewDecoder(response.Body).Decode(&state); err != nil {
 		return false, err
 	}
+	m.mu.Lock()
+	m.awake = state.Ready
+	m.mu.Unlock()
 	return state.Ready, nil
 }
 
@@ -84,6 +95,13 @@ func (m *middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for {
 		ready, err := m.call(ctx, id, "begin")
 		if err != nil {
+			m.mu.Lock()
+			awake := m.awake
+			m.mu.Unlock()
+			rejected, explicit := err.(callbackError)
+			if awake && (!explicit || rejected.status >= 500) {
+				break
+			}
 			http.Error(w, "Resource unavailable", 503)
 			return
 		}
@@ -103,7 +121,7 @@ func (m *middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
-		ticker := time.NewTicker(20 * time.Second)
+		ticker := time.NewTicker(m.heartbeat)
 		defer ticker.Stop()
 		for {
 			select {
@@ -112,10 +130,8 @@ func (m *middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			case <-r.Context().Done():
 				return
 			case <-ticker.C:
-				if _, err := m.call(forwardContext, id, "heartbeat"); err != nil {
-					stopForwarding()
-					return
-				}
+				// A management restart must not terminate a stream already being served.
+				m.call(forwardContext, id, "heartbeat")
 			}
 		}
 	}()

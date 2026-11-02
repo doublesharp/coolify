@@ -1018,6 +1018,8 @@ class Server extends BaseModel
                     'query' => '/'.$resource->maintenancePageFile(),
                 ],
             ];
+            $sleepPriority = ResourceSleepPolicy::where('resource_uuid', $resource->uuid)->first()?->proxy_snapshot;
+            $sleepPriority = collect($sleepPriority['http']['routers'] ?? [])->max('priority') ?? 0;
             foreach ($routes as $index => $route) {
                 $rule = "Host(`{$route['host']}`) && PathPrefix(`{$route['path']}`)";
                 $router = [
@@ -1025,7 +1027,7 @@ class Server extends BaseModel
                     'rule' => $rule,
                     'service' => 'coolify-maintenance-noop',
                     'middlewares' => ['coolify-maintenance-headers', $middleware],
-                    'priority' => strlen($rule) + 1,
+                    'priority' => max(strlen($rule) + 1, $sleepPriority + 1),
                 ];
                 $routers["coolify-maintenance-{$resource->uuid}-{$index}-http"] = $router;
                 if ($route['scheme'] === 'https') {

@@ -6,8 +6,10 @@ use App\Models\ResourceSleepPolicy;
 use App\Services\ResourceSleep;
 use App\Services\ResourceSleepProxy;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\Yaml\Yaml;
 
 require_once __DIR__.'/../Support/ResourceSleep.php';
 
@@ -38,6 +40,9 @@ it('keeps an active request awake and expires abandoned requests', function () {
     $this->travel(40)->seconds();
     expect(app(ResourceSleep::class)->activeRequests($policy))->toBeTrue();
     $this->postJson($url, ['phase' => 'end', 'request_id' => str_repeat('a', 32)])->assertOk();
+    // Completion retains a conservative grace period; no per-request lease removal races.
+    expect(app(ResourceSleep::class)->activeRequests($policy))->toBeTrue();
+    $this->travel(61)->seconds();
     expect(app(ResourceSleep::class)->activeRequests($policy))->toBeFalse();
     $this->postJson($url, ['phase' => 'begin', 'request_id' => str_repeat('b', 32)])->assertOk();
     $this->travel(70)->seconds();
@@ -82,6 +87,7 @@ it('cleans a failed proxy setup and permits disabling it afterwards', function (
     $lifecycle = app(ResourceSleep::class);
     $policy = $lifecycle->configure($application, ['enabled' => false]);
     $proxy = Mockery::mock(ResourceSleepProxy::class);
+    $proxy->shouldReceive('install')->once();
     $proxy->shouldReceive('prepare')->once()->andThrow(new RuntimeException('Proxy setup failed.'));
     $proxy->shouldReceive('remove')->twice();
     app()->instance(ResourceSleepProxy::class, $proxy);
@@ -111,8 +117,67 @@ it('requires a team-wide token before installing middleware on the shared server
 it('permits a team-wide owner token to enable request activity', function () {
     $application = sleepApplication();
     $proxy = Mockery::mock(ResourceSleepProxy::class);
+    $proxy->shouldReceive('install')->once();
     $proxy->shouldReceive('prepare')->once()->andReturnNull();
     app()->instance(ResourceSleepProxy::class, $proxy);
     $this->withToken(sleepToken($application))->patchJson('/api/v1/resources/'.$application->uuid.'/sleep', ['enabled' => true, 'request_activity' => true])
         ->assertOk()->assertJson(['enabled' => true, 'request_activity' => true]);
+});
+
+it('probes the callback without waking or recording visitor activity', function () {
+    $application = sleepApplication();
+    $policy = app(ResourceSleep::class)->configure($application, ['enabled' => true]);
+    $policy->update(['request_activity' => true, 'state' => 'asleep']);
+    Queue::fake([ReconcileResourceSleep::class]);
+    $this->withToken($policy->proxy_token)->postJson('/api/resource-sleep/'.$application->uuid.'/activity', ['phase' => 'probe', 'request_id' => str_repeat('c', 32)])
+        ->assertOk()->assertJson(['ready' => false]);
+    expect($policy->fresh()->activity_version)->toBe(0)
+        ->and(app(ResourceSleep::class)->activeRequests($policy))->toBeFalse();
+    Queue::assertNothingPushed();
+});
+
+it('admits parallel activity without acquiring a shared request lock', function () {
+    $application = sleepApplication();
+    $policy = app(ResourceSleep::class)->configure($application, ['enabled' => true]);
+    $policy->update(['request_activity' => true]);
+    $lock = Cache::lock('resource-sleep-requests-lock:'.$policy->id, 10);
+    $lock->get();
+    try {
+        $this->withToken($policy->proxy_token)->postJson('/api/resource-sleep/'.$application->uuid.'/activity', ['phase' => 'begin', 'request_id' => str_repeat('d', 32)])
+            ->assertOk()->assertJson(['ready' => true]);
+        expect($policy->fresh()->activity_version)->toBe(1);
+    } finally {
+        $lock->release();
+    }
+});
+
+it('lets a retained route bypass a disabled policy without queuing a wake', function () {
+    $application = sleepApplication();
+    $policy = app(ResourceSleep::class)->configure($application, ['enabled' => true]);
+    $policy->update(['request_activity' => true, 'enabled' => false, 'state' => 'disabled']);
+    Queue::fake([ReconcileResourceSleep::class]);
+    $this->withToken($policy->proxy_token)->postJson('/api/resource-sleep/'.$application->uuid.'/activity', ['phase' => 'begin', 'request_id' => str_repeat('e', 32)])
+        ->assertOk()->assertJson(['ready' => true]);
+    Queue::assertNothingPushed();
+});
+
+it('preserves proxy integration and a sufficient upload timeout across native resets', function () {
+    $application = sleepApplication();
+    $server = $application->destination->server;
+    $base = ['services' => ['traefik' => ['command' => ['--entrypoints.http.address=:80', '--entrypoints.http.transport.respondingtimeouts.readtimeout=60s', '--entrypoints.https.address=:443', '--entrypoints.https.transport.respondingtimeouts.readtimeout=0', '--api.insecure=true'], 'volumes' => ['/custom:/custom:ro']]]];
+    $proxy = app(ResourceSleepProxy::class);
+    $config = $proxy->managedConfiguration($server, Yaml::dump($base));
+    $parsed = parseProxyComposeYaml($config);
+    expect($parsed['services']['traefik']['command'])->toContain('--entrypoints.http.transport.respondingtimeouts.readtimeout=240s', '--entrypoints.https.transport.respondingtimeouts.readtimeout=0', '--api.insecure=true', '--experimental.localplugins.resourcesleep.modulename=github.com/coollabsio/resource-sleep')
+        ->and($parsed['services']['traefik']['volumes'])->toContain('/custom:/custom:ro', $server->proxyPath().'/plugins-local:/plugins-local:ro')
+        ->and($proxy->managedConfiguration($server, $config))->toBe($config);
+});
+
+it('gives the maintenance page precedence over a retained sleep route', function () {
+    $application = sleepApplication();
+    $application->update(['fqdn' => 'http://sleep.example.test']);
+    $policy = app(ResourceSleep::class)->configure($application, ['enabled' => true]);
+    $policy->update(['proxy_snapshot' => ['http' => ['routers' => ['test' => ['priority' => 1000]]]]]);
+    $config = Yaml::parse($application->destination->server->maintenanceTraefikConfiguration(collect([$application])));
+    expect(array_values($config['http']['routers'])[0]['priority'])->toBe(1001);
 });
