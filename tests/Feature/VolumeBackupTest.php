@@ -1,6 +1,7 @@
 <?php
 
 use App\Jobs\DeleteResourceJob;
+use App\Jobs\Middleware\ResourceSleepWork;
 use App\Jobs\ScheduledJobManager;
 use App\Jobs\VolumeBackupJob;
 use App\Jobs\VolumeBackupRecoveryJob;
@@ -1861,8 +1862,9 @@ it('archives a named volume using the server compression CPU percentage', functi
 
     $execution = ScheduledVolumeBackupExecution::query()->sole();
 
-    expect($middleware)->toHaveCount(1)
-        ->and($middleware[0])->toBeInstanceOf(WithoutOverlapping::class)
+    expect($middleware)->toHaveCount(2)
+        ->and($middleware[0])->toBeInstanceOf(ResourceSleepWork::class)
+        ->and($middleware[1])->toBeInstanceOf(WithoutOverlapping::class)
         ->and($job->queue)->toBe(crons_queue())
         ->and($execution->status)->toBe('success')
         ->and($execution->size)->toBe(128)
