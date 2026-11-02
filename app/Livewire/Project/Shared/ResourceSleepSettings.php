@@ -51,7 +51,7 @@ class ResourceSleepSettings extends Component
         $this->validate(['idleMinutes' => 'integer|min:1|max:10080']);
         $lifecycle = app(ResourceSleep::class);
         if ($this->requestActivity) {
-            $this->authorize('update', $lifecycle->server($this->resource));
+            $this->authorize('manageProxy', $lifecycle->server($this->resource));
         }
         $dependencies = array_values(array_filter(array_map('trim', explode(',', $this->dependencies))));
         foreach ($dependencies as $uuid) {

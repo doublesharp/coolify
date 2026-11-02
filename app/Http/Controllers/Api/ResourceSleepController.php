@@ -38,7 +38,7 @@ class ResourceSleepController extends Controller
             $this->authorize('deploy', $dependency);
         }
         if ($request->boolean('request_activity')) {
-            $this->authorize('update', $lifecycle->server($resource));
+            $this->authorize('manageProxy', $lifecycle->server($resource));
         }
         $policy = $lifecycle->configure($resource, $request->all());
 
