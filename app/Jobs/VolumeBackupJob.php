@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Events\BackupCreated;
 use App\Helpers\SshMultiplexingHelper;
 use App\Helpers\SshRetryHandler;
+use App\Jobs\Middleware\ResourceSleepWork;
 use App\Models\LocalPersistentVolume;
 use App\Models\S3Storage;
 use App\Models\ScheduledVolumeBackup;
@@ -46,6 +47,7 @@ class VolumeBackupJob implements ShouldBeEncrypted, ShouldQueue
     public function middleware(): array
     {
         return [
+            new ResourceSleepWork($this->backup->backupable?->resource),
             ScheduledJobDeliveryService::withoutOverlapping('volume-backup-'.$this->backup->id, $this->occurrenceUuid)
                 ->shared()
                 ->expireAfter($this->timeout + 60)

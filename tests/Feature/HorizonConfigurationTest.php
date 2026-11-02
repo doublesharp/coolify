@@ -1,11 +1,13 @@
 <?php
 
 use App\Jobs\ProcessGithubPullRequestWebhook;
+use App\Jobs\ReconcileResourceSleep;
 use App\Jobs\ServerLimitCheckJob;
 use App\Jobs\ServerPatchCheckJob;
 use App\Jobs\StripeProcessJob;
 use App\Models\Server;
 use App\Models\Team;
+use App\Services\ResourceSleep;
 use Laravel\Horizon\ProvisioningPlan;
 use Laravel\Horizon\SupervisorOptions;
 
@@ -65,7 +67,7 @@ function horizonSupervisorsFor(array $config): array
     return $parsed;
 }
 
-test('self-hosted keeps a single auto-scaling s6 supervisor in every environment', function () {
+test('self-hosted keeps its auto-scaling s6 supervisor and isolates lifecycle wakes in every environment', function () {
     $parsed = horizonSupervisorsFor(loadHorizonConfigWithEnv([
         'SELF_HOSTED' => 'true',
         'HORIZON_QUEUES' => null,
@@ -76,7 +78,7 @@ test('self-hosted keeps a single auto-scaling s6 supervisor in every environment
     expect(array_keys($parsed))->toBe(['production', 'local']);
 
     foreach ($parsed as $supervisors) {
-        expect(array_keys($supervisors))->toBe(['s6']);
+        expect(array_keys($supervisors))->toEqualCanonicalizing(['s6', 'resource-lifecycle']);
 
         $s6 = $supervisors['s6'];
         expect($s6->queue)->toBe('high,default')
@@ -101,7 +103,7 @@ test('cloud production runs one fixed-size pool per queue with default process c
     ]));
 
     $production = $parsed['production'];
-    expect(array_keys($production))->toBe(['deployments', 'crons', 'high', 'default', 'maintenance', 'webhooks']);
+    expect(array_keys($production))->toBe(['resource-lifecycle', 'deployments', 'crons', 'high', 'default', 'maintenance', 'webhooks']);
 
     foreach (['deployments' => 60, 'crons' => 60, 'high' => 60, 'default' => 40, 'maintenance' => 60, 'webhooks' => 10] as $queue => $processes) {
         $pool = $production[$queue];
@@ -115,7 +117,7 @@ test('cloud production runs one fixed-size pool per queue with default process c
             ->and($pool->timeout)->toBe($parsed['local']['s6']->timeout);
     }
 
-    expect(array_keys($parsed['local']))->toBe(['s6']);
+    expect(array_keys($parsed['local']))->toEqualCanonicalizing(['s6', 'resource-lifecycle']);
 });
 
 test('cloud pool sizes come from env and invalid values fall back to defaults', function () {
@@ -165,7 +167,7 @@ test('self-hosted queue helpers route to a queue the s6 supervisor drains', func
     ]));
 
     foreach ($parsed as $supervisors) {
-        expect(array_keys($supervisors))->toBe(['s6'])
+        expect(array_keys($supervisors))->toEqualCanonicalizing(['s6', 'resource-lifecycle'])
             ->and(explode(',', $supervisors['s6']->queue))
             ->toContain(deployment_queue(), crons_queue(), maintenance_queue(), webhooks_queue());
     }
@@ -206,3 +208,14 @@ test('server patch checks run on the maintenance queue on cloud and on high on s
     'cloud' => [false, 'maintenance'],
     'self-hosted' => [true, 'high'],
 ]);
+
+test('lifecycle work has a dedicated bounded pool and its own shorter job timeout', function () {
+    $config = loadHorizonConfigWithEnv(['SELF_HOSTED' => 'true']);
+    foreach ($config['environments'] as $pools) {
+        expect($pools['resource-lifecycle']['queue'])->toBe(['resource-lifecycle'])
+            ->and($pools['resource-lifecycle']['maxProcesses'])->toBe(2);
+    }
+    $job = new ReconcileResourceSleep;
+    expect($job->queue)->toBe('resource-lifecycle')->and($job->timeout)->toBeGreaterThan(ResourceSleep::OPERATION_SECONDS)
+        ->and($job->timeout)->toBeLessThan(ResourceSleep::LOCK_SECONDS);
+});

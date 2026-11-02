@@ -5,10 +5,12 @@ namespace App\Jobs;
 use App\Models\ResourceSleepPolicy;
 use App\Services\ResourceSleep;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -18,25 +20,36 @@ class ReconcileResourceSleep implements ShouldQueue
 
     public int $tries = 1;
 
-    public int $timeout = 240;
+    public int $timeout = 150;
 
-    public function __construct(public ?int $policyId = null, public ?string $action = null) {}
+    public function __construct(public ?int $policyId = null, public ?string $action = null)
+    {
+        $this->onQueue('resource-lifecycle');
+    }
 
     public function handle(ResourceSleep $lifecycle): void
     {
         if ($this->policyId !== null) {
             $policy = ResourceSleepPolicy::find($this->policyId);
             if ($policy) {
-                match ($this->action) {
-                    'wake' => $lifecycle->wake($policy),
-                    'sleep' => $lifecycle->sleep($policy),
-                    default => $lifecycle->reconcile($policy),
-                };
+                try {
+                    match ($this->action) {
+                        'wake' => $lifecycle->wake($policy),
+                        'sleep' => $lifecycle->sleep($policy),
+                        default => $lifecycle->reconcile($policy),
+                    };
+                } catch (LockTimeoutException) {
+                    // Another lifecycle operation already owns this resource.
+                } finally {
+                    if ($this->action === 'wake') {
+                        Cache::forget('resource-sleep-wake-queued:'.$policy->id);
+                    }
+                }
             }
 
             return;
         }
-        ResourceSleepPolicy::where('enabled', true)->where('state', 'awake')->each(function ($policy) {
+        ResourceSleepPolicy::where(fn ($query) => $query->where('enabled', true)->orWhereNotNull('proxy_snapshot'))->each(function ($policy) {
             self::dispatch($policy->id);
         });
     }

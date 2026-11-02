@@ -12,7 +12,6 @@ use App\Models\EnvironmentVariable;
 use App\Models\Server;
 use App\Models\StandaloneDocker;
 use App\Notifications\Application\DeploymentFailed;
-use App\Services\ResourceSleep;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Spatie\Url\Url;
@@ -35,8 +34,6 @@ function queue_application_deployment(Application $application, string $deployme
     if ($destination) {
         $destination_id = $destination->id;
     }
-
-    app(ResourceSleep::class)->deployment($application);
 
     $admission = DB::transaction(function () use ($application, $application_id, $commit, $deployment_uuid, $deployment_url, $destination_id, $docker_registry_image_tag, $force_rebuild, $git_type, $is_api, $is_webhook, $no_questions_asked, $only_this_server, $parent_deployment_uuid, $pull_request_id, $restart_only, $rollback, $server_id, $server_name) {
         // Lock stable rows because an empty deployment queue has no row to lock.

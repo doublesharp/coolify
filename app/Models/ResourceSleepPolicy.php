@@ -20,7 +20,7 @@ class ResourceSleepPolicy extends Model
     protected function casts(): array
     {
         return [
-            'enabled' => 'boolean', 'request_activity' => 'boolean',
+            'activity_version' => 'integer', 'enabled' => 'boolean', 'request_activity' => 'boolean',
             'idle_timeout_seconds' => 'integer', 'minimum_uptime_seconds' => 'integer',
             'dependencies' => 'array', 'containers' => 'encrypted:array',
             'webhooks' => 'encrypted:array', 'proxy_snapshot' => 'encrypted:array',

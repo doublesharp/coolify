@@ -56,7 +56,11 @@ $cloudQueues = [
     'webhooks' => ['HORIZON_WEBHOOKS_PROCESSES', 10],
 ];
 
-$cloudSupervisors = [];
+$lifecycleSupervisor = array_replace($workerOptions, [
+    'queue' => ['resource-lifecycle'], 'balance' => false, 'minProcesses' => 1, 'maxProcesses' => 2,
+]);
+
+$cloudSupervisors = ['resource-lifecycle' => $lifecycleSupervisor];
 
 foreach ($cloudQueues as $queue => [$processesEnv, $defaultProcesses]) {
     $processes = filter_var(env($processesEnv), FILTER_VALIDATE_INT, [
@@ -272,9 +276,9 @@ return [
     'worker_timeout' => $workerOptions['timeout'],
 
     'environments' => [
-        'production' => $isCloud ? $cloudSupervisors : ['s6' => $selfHostedSupervisor],
+        'production' => $isCloud ? $cloudSupervisors : ['s6' => $selfHostedSupervisor, 'resource-lifecycle' => $lifecycleSupervisor],
         // Local Cloud mode runs every Cloud queue in the one dev supervisor.
-        'local' => ['s6' => $isCloud
+        'local' => ['resource-lifecycle' => $lifecycleSupervisor, 's6' => $isCloud
             ? ['queue' => env('HORIZON_QUEUES', 'high,default,'.implode(',', array_diff(array_keys($cloudQueues), ['high', 'default'])))] + $selfHostedSupervisor
             : $selfHostedSupervisor],
     ],
