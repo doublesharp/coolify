@@ -22,6 +22,7 @@ use App\Models\ManagedDnsRecord;
 use App\Models\PrivateKey;
 use App\Models\Project;
 use App\Models\ResourceLink;
+use App\Models\ResourceSleepPolicy;
 use App\Models\S3Storage;
 use App\Models\ScheduledDatabaseBackup;
 use App\Models\ScheduledTask;
@@ -51,12 +52,14 @@ use App\Rules\DockerImageFormat;
 use App\Rules\ValidServerIp;
 use App\Services\Dns\CloudflareDnsProvider;
 use App\Services\ProjectIconStorageService;
+use App\Services\ResourceSleep;
 use App\Support\ValidationPatterns;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
@@ -415,6 +418,34 @@ class ServerTransferImporter
 
                     $this->importCanvasPositions((array) data_get($environmentPayload, 'canvas_positions', []), $environment);
                     $this->importResourceLinks((array) data_get($environmentPayload, 'resource_links', []), $environment, $preserveUuids);
+                }
+            }
+
+            // Resources are now imported, so all dependency UUIDs can be mapped to their target records.
+            $resources = [...$this->applicationMap, ...$this->databaseMap, ...$this->serviceMap];
+            foreach (data_get($bundle, 'projects', []) as $projectPayload) {
+                foreach (data_get($projectPayload, 'environments', []) as $environmentPayload) {
+                    foreach ([...data_get($environmentPayload, 'applications', []), ...data_get($environmentPayload, 'services', [])] as $payload) {
+                        $settings = data_get($payload, 'sleep_policy');
+                        $resource = $resources[data_get($payload, 'uuid')] ?? null;
+                        if (! is_array($settings) || ! $resource) {
+                            continue;
+                        }
+                        $settings['dependencies'] = array_map(function ($uuid) use ($resources) {
+                            if (! isset($resources[$uuid])) {
+                                throw new RuntimeException('A sleep policy dependency is missing from the transfer bundle.');
+                            }
+
+                            return $resources[$uuid]->uuid;
+                        }, $settings['dependencies'] ?? []);
+                        $policy = new ResourceSleepPolicy;
+                        $policy->forceFill(collect($settings)->only([...ResourceSleep::SETTINGS, 'webhook_secret'])->all());
+                        $policy->forceFill([
+                            'resource_uuid' => $resource->uuid, 'team_id' => $teamId, 'server_id' => $server->id,
+                            'proxy_token' => Str::random(64), 'state' => 'awake',
+                            'last_activity_at' => now(), 'woke_at' => now(),
+                        ])->save();
+                    }
                 }
             }
 

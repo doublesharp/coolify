@@ -17,6 +17,7 @@ use App\Models\ManagedDnsRecord;
 use App\Models\PrivateKey;
 use App\Models\Project;
 use App\Models\ResourceLink;
+use App\Models\ResourceSleepPolicy;
 use App\Models\S3Storage;
 use App\Models\ScheduledDatabaseBackup;
 use App\Models\ScheduledTask;
@@ -33,6 +34,7 @@ use App\Models\SwarmDocker;
 use App\Models\Tag;
 use App\Models\Team;
 use App\Models\User;
+use App\Services\ResourceSleep;
 use App\Services\ServerTransfer\ServerTransferBundle;
 use App\Services\ServerTransfer\ServerTransferClaimer;
 use App\Services\ServerTransfer\ServerTransferExporter;
@@ -1984,4 +1986,30 @@ test('an application with a system-wide GitHub App that the target lacks is list
     expect(data_get($bundle, 'projects.0.environments.0.applications.0.source.system_wide'))->toBeTrue()
         ->and(data_get($server->server_metadata, 'transfer.git_source_applications'))->toBe([$this->application->uuid])
         ->and(collect(data_get($server->server_metadata, 'transfer.finish.items'))->pluck('key'))->toContain("git_source:{$this->application->uuid}");
+});
+
+test('sleep settings transfer with mapped dependency UUIDs and fresh runtime credentials', function () {
+    $policy = app(ResourceSleep::class)->configure($this->application, [
+        'enabled' => true, 'idle_timeout_seconds' => 900, 'dependencies' => [$this->database->uuid],
+        'webhooks' => ['after_sleep' => 'https://8.8.8.8/hook'],
+    ]);
+    $policy->update(['state' => 'asleep', 'containers' => ['private-runtime-state']]);
+    $secret = $policy->webhook_secret;
+    $proxyToken = $policy->proxy_token;
+    $bundle = app(ServerTransferExporter::class)->export($this->server);
+    $this->service->forceDelete();
+    $this->application->forceDelete();
+    $this->database->forceDelete();
+    $this->server->forceDelete();
+    Server::flushIdentityMap();
+    $result = app(ServerTransferImporter::class)->import($bundle, $this->team->id, preserveUuids: false, adoptMode: false);
+    $server = Server::whereUuid($result['server_uuid'])->firstOrFail();
+    $restored = ResourceSleepPolicy::where('server_id', $server->id)->firstOrFail();
+    $database = StandalonePostgresql::where('destination_id', $server->destinations()->first()->id)->firstOrFail();
+    expect($restored->dependencies)->toBe([$database->uuid])
+        ->and($restored->idle_timeout_seconds)->toBe(900)
+        ->and($restored->webhook_secret)->toBe($secret)
+        ->and($restored->proxy_token)->not->toBe($proxyToken)
+        ->and($restored->state)->toBe('awake')
+        ->and($restored->containers)->toBeNull();
 });
