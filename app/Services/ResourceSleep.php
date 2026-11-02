@@ -89,7 +89,7 @@ class ResourceSleep
                 'last_activity_at' => now(), 'woke_at' => now(),
             ]);
         }
-        $wasRequestActivity = $policy->request_activity && $policy->enabled;
+        $wasRequestActivity = $policy->request_activity;
         $policy->fill($settings)->save();
         try {
             if ($policy->enabled && $policy->request_activity) {
@@ -98,6 +98,11 @@ class ResourceSleep
                 app(ResourceSleepProxy::class)->remove($policy);
             }
         } catch (Throwable) {
+            try {
+                app(ResourceSleepProxy::class)->remove($policy);
+            } catch (Throwable) {
+                // Keep the policy so a later save can retry cleanup when the server recovers.
+            }
             $policy->update(['enabled' => false, 'error' => 'Request activity setup failed. Check the proxy and try again.']);
             throw ValidationException::withMessages(['request_activity' => 'Request activity setup failed. Check the proxy and try again.']);
         }

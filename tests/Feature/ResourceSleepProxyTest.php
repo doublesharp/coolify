@@ -5,6 +5,7 @@ use App\Services\ResourceSleep;
 use App\Services\ResourceSleepProxy;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Validation\ValidationException;
 
 require_once __DIR__.'/../Support/ResourceSleep.php';
 
@@ -72,4 +73,22 @@ it('removes a deleted resource route even when its policy was asleep', function 
     $application->forceDelete();
     app(ResourceSleep::class)->reconcile($policy);
     expect($policy->fresh())->toBeNull();
+});
+
+it('cleans a failed proxy setup and permits disabling it afterwards', function () {
+    $application = sleepApplication();
+    $lifecycle = app(ResourceSleep::class);
+    $policy = $lifecycle->configure($application, ['enabled' => false]);
+    $proxy = Mockery::mock(ResourceSleepProxy::class);
+    $proxy->shouldReceive('prepare')->once()->andThrow(new RuntimeException('Proxy setup failed.'));
+    $proxy->shouldReceive('remove')->twice();
+    app()->instance(ResourceSleepProxy::class, $proxy);
+    try {
+        $lifecycle->configure($application, ['enabled' => true, 'request_activity' => true]);
+        test()->fail('Expected setup failure.');
+    } catch (ValidationException) {
+        expect($policy->fresh()->enabled)->toBeFalse();
+    }
+    $policy = $lifecycle->configure($application, ['enabled' => false, 'request_activity' => false]);
+    expect($policy->request_activity)->toBeFalse();
 });
