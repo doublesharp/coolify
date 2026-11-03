@@ -57,7 +57,7 @@ class ResourceSleepSettings extends Component
         foreach ($dependencies as $uuid) {
             $dependency = getResourceByUuid($uuid, $this->resource->environment->project->team_id);
             abort_unless($dependency, 422, 'Invalid dependency.');
-            $this->authorize('deploy', $dependency);
+            $this->authorize($dependency instanceof Application || $dependency instanceof Service ? 'deploy' : 'manage', $dependency);
         }
         $settings = ['enabled' => $this->enabled, 'request_activity' => $this->requestActivity,
             'idle_timeout_seconds' => $this->idleMinutes * 60, 'dependencies' => $dependencies];

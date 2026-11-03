@@ -35,7 +35,7 @@ class ResourceSleepController extends Controller
         foreach ((array) $request->input('dependencies', []) as $dependencyUuid) {
             $dependency = getResourceByUuid((string) $dependencyUuid, getTeamIdFromToken());
             abort_unless($dependency, 422, 'Invalid dependency.');
-            $this->authorize('deploy', $dependency);
+            $this->authorize($dependency instanceof Application || $dependency instanceof Service ? 'deploy' : 'manage', $dependency);
         }
         if ($request->boolean('request_activity')) {
             $this->authorize('update', $lifecycle->server($resource));
