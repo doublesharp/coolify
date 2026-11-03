@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\AccessLevel;
 use App\Http\Controllers\Controller;
 use App\Jobs\ReconcileResourceSleep;
 use App\Models\Application;
 use App\Models\ResourceSleepPolicy;
 use App\Models\Service;
+use App\Services\Access\AccessResolver;
 use App\Services\ResourceSleep;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
@@ -37,8 +39,10 @@ class ResourceSleepController extends Controller
             abort_unless($dependency, 422, 'Invalid dependency.');
             $this->authorize($dependency instanceof Application || $dependency instanceof Service ? 'deploy' : 'manage', $dependency);
         }
-        if ($request->boolean('request_activity')) {
-            $this->authorize('update', $lifecycle->server($resource));
+        $currentPolicy = ResourceSleepPolicy::where('resource_uuid', $uuid)->first();
+        if ($request->boolean('request_activity', $currentPolicy?->request_activity ?? false)) {
+            abort_unless(app(AccessResolver::class)->allowsTeamWide($request->user(), AccessLevel::Write, (int) getTeamIdFromToken()), 403, 'Managing request activity requires team-wide write access.');
+            $this->authorize('manageProxy', $lifecycle->server($resource));
         }
         $policy = $lifecycle->configure($resource, $request->all());
 

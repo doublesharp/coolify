@@ -934,8 +934,12 @@ class Server extends BaseModel
      * Writes $contents to $path on this server with scp. A shell command is limited to 128 KiB,
      * so large pages and proxy files cannot go inside one command.
      */
-    public function uploadProxyFile(string $path, string $contents): void
+    public function uploadProxyFile(string $path, string $contents, int $mode = 0644): void
     {
+        if (! in_array($mode, [0600, 0644], true)) {
+            throw new \InvalidArgumentException('Invalid proxy file permissions.');
+        }
+        $permissions = decoct($mode);
         $uploadPath = '/tmp/coolify-upload-'.bin2hex(random_bytes(8));
         $localPath = tempnam(sys_get_temp_dir(), 'coolify-proxy-file-');
         try {
@@ -946,7 +950,7 @@ class Server extends BaseModel
         }
 
         // The proxy and the page container read the file as root, other users do not need it.
-        instant_remote_process(["mv -f $uploadPath $path", "chmod 644 $path"], $this);
+        instant_remote_process(["chmod $permissions $uploadPath", "mv -f $uploadPath $path"], $this);
     }
 
     /**
@@ -1014,6 +1018,8 @@ class Server extends BaseModel
                     'query' => '/'.$resource->maintenancePageFile(),
                 ],
             ];
+            $sleepPriority = ResourceSleepPolicy::where('resource_uuid', $resource->uuid)->first()?->proxy_snapshot;
+            $sleepPriority = collect($sleepPriority['http']['routers'] ?? [])->max('priority') ?? 0;
             foreach ($routes as $index => $route) {
                 $rule = "Host(`{$route['host']}`) && PathPrefix(`{$route['path']}`)";
                 $router = [
@@ -1021,7 +1027,7 @@ class Server extends BaseModel
                     'rule' => $rule,
                     'service' => 'coolify-maintenance-noop',
                     'middlewares' => ['coolify-maintenance-headers', $middleware],
-                    'priority' => strlen($rule) + 1,
+                    'priority' => max(strlen($rule) + 1, $sleepPriority + 1),
                 ];
                 $routers["coolify-maintenance-{$resource->uuid}-{$index}-http"] = $router;
                 if ($route['scheme'] === 'https') {

@@ -20,6 +20,7 @@ use App\Http\Controllers\Api\NotificationsController;
 use App\Http\Controllers\Api\OtherController;
 use App\Http\Controllers\Api\ProjectController;
 use App\Http\Controllers\Api\ResourcesController;
+use App\Http\Controllers\Api\ResourceSleepActivityController;
 use App\Http\Controllers\Api\ResourceSleepController;
 use App\Http\Controllers\Api\S3StoragesController;
 use App\Http\Controllers\Api\ScheduledTasksController;
@@ -43,7 +44,11 @@ use App\Http\Controllers\Api\TeamController;
 use App\Http\Controllers\Api\VolumeBackupsController;
 use App\Http\Controllers\Api\VultrController;
 use App\Http\Middleware\ApiAllowed;
+use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\Route;
+
+Route::post('/resource-sleep/{uuid}/activity', ResourceSleepActivityController::class)
+    ->withoutMiddleware(ThrottleRequests::class.':api');
 
 Route::get('/health', [OtherController::class, 'healthcheck']);
 Route::group([

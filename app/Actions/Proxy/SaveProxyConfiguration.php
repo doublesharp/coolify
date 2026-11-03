@@ -2,8 +2,10 @@
 
 namespace App\Actions\Proxy;
 
+use App\Models\ResourceSleepPolicy;
 use App\Models\Server;
 use App\Services\ProxyPortParser;
+use App\Services\ResourceSleepProxy;
 use Illuminate\Validation\ValidationException;
 use Lorisleiva\Actions\Concerns\AsAction;
 use Symfony\Component\Yaml\Tag\TaggedValue;
@@ -17,6 +19,10 @@ class SaveProxyConfiguration
 
     public function handle(Server $server, string $configuration): void
     {
+        if (ResourceSleepPolicy::where('server_id', $server->id)
+            ->where(fn ($query) => $query->where(fn ($query) => $query->where('enabled', true)->where('request_activity', true))->orWhereNotNull('proxy_snapshot'))->exists()) {
+            $configuration = app(ResourceSleepProxy::class)->managedConfiguration($server, $configuration);
+        }
         try {
             ProxyPortParser::fromConfiguration($configuration);
         } catch (\InvalidArgumentException $exception) {
