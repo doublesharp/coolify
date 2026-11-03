@@ -16,6 +16,8 @@ class ResourceSleepProxy
 {
     private const MODULE = 'github.com/coollabsio/resource-sleep';
 
+    private const API_URL = 'http://127.0.0.1:18081/api/rawdata';
+
     public function install(Server $server): void
     {
         Cache::lock('resource-sleep-proxy:'.$server->id, 120)->block(5, fn () => $this->installLocked($server));
@@ -36,6 +38,13 @@ class ResourceSleepProxy
         $files = ['.traefik.yml', 'go.mod', 'resource_sleep.go'];
         $hash = $this->pluginHash();
         $updated = $this->managedConfiguration($server, $configuration);
+        // The lifecycle control endpoint listens only inside the proxy container.
+        instant_remote_process(['mkdir -p '.escapeshellarg($path.'/dynamic')], $server, maxAttempts: 1);
+        $server->uploadProxyFile($path.'/dynamic/coolify-resource-sleep-api.yaml', Yaml::dump([
+            'http' => ['routers' => ['coolify-resource-sleep-api' => [
+                'entryPoints' => ['coolify-resource-sleep'], 'rule' => 'PathPrefix(`/api`)', 'service' => 'api@internal',
+            ]]],
+        ], 10, 2), 0600);
         if ($server->proxy->get('resource_sleep_plugin_hash') === $hash && parseProxyComposeYaml($updated) == $config) {
             return;
         }
@@ -73,8 +82,8 @@ class ResourceSleepProxy
         }
         // Docker provider discovery can lag an explicit proxy restart by a few seconds.
         for ($attempt = 0; $attempt < 5; $attempt++) {
-            $raw = instant_remote_process(['docker exec coolify-proxy wget -qO- http://127.0.0.1:8080/api/rawdata'], $server, timeout: 5, maxAttempts: 1);
             try {
+                $raw = instant_remote_process(['docker exec coolify-proxy wget -qO- '.self::API_URL], $server, timeout: 5, maxAttempts: 1);
                 $configuration = $this->configuration($policy, $containers, json_decode($raw ?? '', true, flags: JSON_THROW_ON_ERROR));
                 break;
             } catch (RuntimeException $exception) {
@@ -226,7 +235,7 @@ class ResourceSleepProxy
     private function waitForRoutes(Server $server, array $routers, bool $present): void
     {
         for ($attempt = 0; $attempt < 10; $attempt++) {
-            $output = instant_remote_process(['docker exec coolify-proxy wget -qO- http://127.0.0.1:8080/api/rawdata'], $server, timeout: 5, maxAttempts: 1);
+            $output = instant_remote_process(['docker exec coolify-proxy wget -qO- '.self::API_URL], $server, timeout: 5, maxAttempts: 1);
             $raw = json_decode($output ?? '', true, flags: JSON_THROW_ON_ERROR);
             $ready = true;
             foreach ($routers as $name) {
@@ -250,6 +259,11 @@ class ResourceSleepProxy
         }
         $service = &$config['services']['traefik'];
         $service['command'] = updateTaggedProxyComposeList($service['command'] ?? [], function ($items) {
+            $items = array_values(array_filter($items, fn ($flag) => strtolower($flag) !== '--api=false'));
+            $items = array_map(fn ($flag) => str_starts_with(strtolower($flag), '--entrypoints.coolify-resource-sleep.address=')
+                ? '--entrypoints.coolify-resource-sleep.address=127.0.0.1:18081' : $flag, $items);
+            $items[] = '--api=true';
+            $items[] = '--entrypoints.coolify-resource-sleep.address=127.0.0.1:18081';
             $items[] = '--experimental.localplugins.resourcesleep.modulename='.self::MODULE;
             foreach (['http', 'https'] as $entry) {
                 if (! collect($items)->contains(fn ($flag) => str_starts_with(strtolower($flag), '--entrypoints.'.$entry.'.address='))) {
