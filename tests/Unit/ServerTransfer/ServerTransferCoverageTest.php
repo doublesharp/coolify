@@ -19,6 +19,7 @@ use App\Models\ManagedDnsRecord;
 use App\Models\PrivateKey;
 use App\Models\Project;
 use App\Models\ResourceLink;
+use App\Models\ResourceSleepPolicy;
 use App\Models\S3Storage;
 use App\Models\ScheduledDatabaseBackup;
 use App\Models\ScheduledTask;
@@ -42,6 +43,7 @@ use App\Models\SwarmDocker;
 use App\Models\Tag;
 use App\Models\Team;
 use App\Models\User;
+use App\Services\ResourceSleep;
 use App\Services\ServerTransfer\ServerTransferCoverage;
 use App\Services\ServerTransfer\ServerTransferExporter;
 use Illuminate\Database\Eloquent\Model;
@@ -146,6 +148,7 @@ beforeEach(function () {
     Application::factory()->create([...$onDestination, 'source_type' => GitlabApp::class, 'source_id' => $gitlabApp->id]);
     $giteaApp = transferCoverageRecord(GiteaApp::class, [...$teamId, 'is_system_wide' => false]);
     Application::factory()->create([...$onDestination, 'source_type' => GiteaApp::class, 'source_id' => $giteaApp->id]);
+    app(ResourceSleep::class)->configure($application, ['enabled' => false]);
     $preview = transferCoverageRecord(ApplicationPreview::class, ['application_id' => $application->id]);
 
     $s3 = transferCoverageRecord(S3Storage::class, $teamId);
@@ -234,6 +237,7 @@ test('every exported value arrives unchanged on the target', function () {
         Environment::class => ['canvas_positions'],
     ];
     $values = [
+        ResourceSleepPolicy::class => ['state' => 'awake'],
         Server::class => ['proxy' => ['type' => 'TRAEFIK', 'status' => 'running', 'redirect_enabled' => false, 'redirect_url' => 'https://fuzz.example.test']],
         Application::class => ['fqdn' => 'https://fuzz-a.example.test,https://fuzz-b.example.test', 'domain_port_overrides' => null, 'noindex_domains' => ['https://fuzz-b.example.test']],
         ApplicationPreview::class => ['fqdn' => 'https://pr-fuzz.example.test', 'domain_port_overrides' => null],

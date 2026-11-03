@@ -20,6 +20,7 @@ use App\Http\Controllers\Api\NotificationsController;
 use App\Http\Controllers\Api\OtherController;
 use App\Http\Controllers\Api\ProjectController;
 use App\Http\Controllers\Api\ResourcesController;
+use App\Http\Controllers\Api\ResourceSleepController;
 use App\Http\Controllers\Api\S3StoragesController;
 use App\Http\Controllers\Api\ScheduledTasksController;
 use App\Http\Controllers\Api\SecretManagerController;
@@ -67,6 +68,11 @@ Route::group([
     'middleware' => ['auth:sanctum', 'api.token.team', ApiAllowed::class, 'api.sensitive'],
     'prefix' => 'v1',
 ], function () {
+
+    Route::get('/resources/{uuid}/sleep', [ResourceSleepController::class, 'show'])->middleware('api.ability:read');
+    Route::patch('/resources/{uuid}/sleep', [ResourceSleepController::class, 'update'])->middleware(['api.ability:write', 'api.ability:deploy']);
+    Route::post('/resources/{uuid}/sleep', [ResourceSleepController::class, 'sleep'])->middleware('api.ability:deploy');
+    Route::post('/resources/{uuid}/wake', [ResourceSleepController::class, 'wake'])->middleware('api.ability:deploy');
 
     Route::get('/version', [OtherController::class, 'version'])->middleware(['api.ability:read']);
     Route::get('/audit-events', [AuditEventsController::class, 'index'])->middleware(['api.ability:read']);

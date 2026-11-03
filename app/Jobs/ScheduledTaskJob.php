@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Events\ScheduledTaskDone;
 use App\Exceptions\NonReportableException;
+use App\Jobs\Middleware\ResourceSleepWork;
 use App\Models\Application;
 use App\Models\EnvironmentVariable;
 use App\Models\ScheduledTask;
@@ -93,7 +94,7 @@ class ScheduledTaskJob implements ShouldBeEncrypted, ShouldQueue
     {
         $expireAfter = ($this->task->timeout ?? 300) + 300;
 
-        return [ScheduledJobDeliveryService::withoutOverlapping('scheduled-task-'.$this->task->id, $this->occurrenceUuid)->expireAfter($expireAfter)->dontRelease()];
+        return [new ResourceSleepWork($this->task->service ?? $this->task->application), ScheduledJobDeliveryService::withoutOverlapping('scheduled-task-'.$this->task->id, $this->occurrenceUuid)->expireAfter($expireAfter)->dontRelease()];
     }
 
     private function initializeExecutionContext(): void

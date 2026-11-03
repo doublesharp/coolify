@@ -5,9 +5,11 @@ namespace App\Jobs;
 use App\Events\BackupCreated;
 use App\Helpers\SshMultiplexingHelper;
 use App\Helpers\SshRetryHandler;
+use App\Jobs\Middleware\ResourceSleepWork;
 use App\Models\S3Storage;
 use App\Models\ScheduledDatabaseBackup;
 use App\Models\ScheduledDatabaseBackupExecution;
+use App\Models\ScheduledJobDelivery;
 use App\Models\Server;
 use App\Models\ServiceDatabase;
 use App\Models\StandaloneClickhouse;
@@ -95,9 +97,14 @@ class DatabaseBackupJob implements ShouldBeEncrypted, ShouldQueue
      */
     public ?string $executionUuidPrefix = null;
 
+    /** Allow lifecycle deferrals without consuming the supervisor's one-attempt limit. */
+    public int $retryUntil;
+
     public function __construct(public ScheduledDatabaseBackup $backup, public ?string $occurrenceUuid = null)
     {
         $this->onQueue(crons_queue());
+        $scheduledFor = $occurrenceUuid ? ScheduledJobDelivery::where('uuid', $occurrenceUuid)->value('scheduled_for') : null;
+        $this->retryUntil = Carbon::parse($scheduledFor ?? now())->addHours(ScheduledJobDeliveryService::LATE_RUN_MAX_AGE_HOURS)->timestamp;
         $this->timeout = ($backup->timeout ?? 3600) + self::WORKER_TIMEOUT_MARGIN_SECONDS;
         $this->executionUuidPrefix = new_public_id(16);
     }
@@ -106,7 +113,7 @@ class DatabaseBackupJob implements ShouldBeEncrypted, ShouldQueue
     {
         $expireAfter = ($this->backup->timeout ?? 3600) + 300;
 
-        return [ScheduledJobDeliveryService::withoutOverlapping('database-backup-'.$this->backup->id, $this->occurrenceUuid)->expireAfter($expireAfter)->dontRelease()];
+        return [new ResourceSleepWork($this->backup->database), ScheduledJobDeliveryService::withoutOverlapping('database-backup-'.$this->backup->id, $this->occurrenceUuid)->expireAfter($expireAfter)->dontRelease()];
     }
 
     public function handle(): void
@@ -1152,6 +1159,8 @@ class DatabaseBackupJob implements ShouldBeEncrypted, ShouldQueue
     public function failed(?Throwable $exception): void
     {
         if ($this->occurrenceUuid) {
+            // Admission can fail before handle() claims the occurrence.
+            app(ScheduledJobDeliveryService::class)->claim($this->occurrenceUuid, $this->job?->uuid() ?? $this->occurrenceUuid);
             app(ScheduledJobDeliveryService::class)->fail($this->occurrenceUuid, $this->job?->uuid() ?? $this->occurrenceUuid);
         }
 
@@ -1169,6 +1178,16 @@ class DatabaseBackupJob implements ShouldBeEncrypted, ShouldQueue
         // After a worker timeout this runs on a fresh job copy without the state handle() set.
         $this->team ??= Team::find($this->backup->team_id);
         $executions = $this->executionsOfThisRun();
+        if ($executions->isEmpty()) {
+            // A lifecycle admission failure happens before handle() creates an execution.
+            // Keep manual requests visible in backup history as well as in the failed queue.
+            $this->executionUuidPrefix ??= new_public_id(16);
+            $executions->push(ScheduledDatabaseBackupExecution::create([
+                'uuid' => $this->executionUuidPrefix.new_public_id(8),
+                'scheduled_database_backup_id' => $this->backup->id,
+                'status' => 'running',
+            ]));
+        }
 
         // Don't overwrite a finished execution: handle() already reported it, and a post-backup
         // error (e.g. notification failure) must not mark a successful backup as failed (#9088).

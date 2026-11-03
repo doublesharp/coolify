@@ -82,6 +82,7 @@
                 @elseif ($currentRoute === 'project.service.domains')
                     <livewire:project.service.domains :service="$service" />
                     <livewire:project.shared.maintenance :resource="$service" />
+                    <livewire:project.shared.resource-sleep-settings :resource="$service" />
                 @elseif ($currentRoute === 'project.service.environment-variables')
                     <livewire:project.shared.environment-variable.all :resource="$service" />
                     <livewire:project.shared.secret-manager-links :resource="$service" />
