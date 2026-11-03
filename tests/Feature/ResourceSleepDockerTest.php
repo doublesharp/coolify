@@ -92,7 +92,7 @@ it('sleeps and wakes real containers through Traefik while preserving requests a
             '--label', 'coolify.applicationUuid='.$dependency->uuid, '--label', 'coolify.managed=true', '--label', 'coolify.type=application', '--label', 'coolify.sleep-test='.$prefix, '--label', 'traefik.enable=false', 'redis:7.4-alpine']);
         $configuration = ['name' => $prefix, 'services' => ['traefik' => [
             'image' => 'traefik:v3.6', 'container_name' => 'coolify-proxy', 'labels' => ['coolify.sleep-test' => $prefix],
-            'ports' => ['127.0.0.1:'.$proxyPort.':80'], 'extra_hosts' => PHP_OS_FAMILY === 'Linux' ? ['host.docker.internal:host-gateway'] : [], 'command' => ['--entrypoints.http.address=:80', '--providers.docker=true', '--providers.docker.constraints=Label(`coolify.sleep-test`, `'.$prefix.'`)', '--providers.docker.exposedbydefault=false', '--providers.file.directory=/traefik/dynamic', '--providers.file.watch=true', '--api.insecure=true'],
+            'ports' => ['127.0.0.1:'.$proxyPort.':80'], 'extra_hosts' => PHP_OS_FAMILY === 'Linux' ? ['host.docker.internal:host-gateway'] : [], 'command' => ['--entrypoints.http.address=:80', '--providers.docker=true', '--providers.docker.constraints=Label(`coolify.sleep-test`, `'.$prefix.'`)', '--providers.docker.exposedbydefault=false', '--providers.file.directory=/traefik/dynamic', '--providers.file.watch=true', '--api.insecure=false'],
             'volumes' => ['/var/run/docker.sock:/var/run/docker.sock:ro', $directory.'/proxy:/traefik'],
             'networks' => [$prefix],
         ]], 'networks' => [$prefix => ['external' => true]]];
@@ -126,6 +126,8 @@ it('sleeps and wakes real containers through Traefik while preserving requests a
         }
         config(['app.url' => $host]);
         $policy = $lifecycle->configure($application, ['enabled' => true, 'request_activity' => true, 'idle_timeout_seconds' => 2, 'minimum_uptime_seconds' => 0, 'dependencies' => [$dependency->uuid], 'webhooks' => ['before_sleep' => $management.'/_lifecycle-hook', 'after_wake' => $management.'/_lifecycle-hook']]);
+        // The API must work inside Traefik while remaining unreachable to app containers.
+        $run(['docker', 'exec', $backendName, 'node', '-e', 'const http=require("http");const r=http.get("http://'.$proxyName.':18081/api/rawdata",()=>process.exit(1));r.setTimeout(3000,()=>process.exit(1));r.on("error",e=>process.exit(e.code==="ECONNREFUSED"?0:1));']);
         $site = 'http://127.0.0.1:'.$proxyPort;
         Http::withHeaders(['Host' => 'sleep.example.test'])->get($site.'/echo')->throwUnlessStatus(401);
         $policy->update(['last_activity_at' => now()->subMinute(), 'woke_at' => now()->subMinute()]);

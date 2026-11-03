@@ -181,3 +181,16 @@ it('gives the maintenance page precedence over a retained sleep route', function
     $config = Yaml::parse($application->destination->server->maintenanceTraefikConfiguration(collect([$application])));
     expect(array_values($config['http']['routers'])[0]['priority'])->toBe(1001);
 });
+
+it('uses a loopback API without enabling the insecure dashboard listener', function () {
+    $application = sleepApplication();
+    $server = $application->destination->server;
+    $base = ['services' => ['traefik' => ['command' => ['--entrypoints.http.address=:80', '--api.insecure=false'], 'ports' => ['80:80']]]];
+    $proxy = app(ResourceSleepProxy::class);
+    $config = $proxy->managedConfiguration($server, Yaml::dump($base));
+    $service = parseProxyComposeYaml($config)['services']['traefik'];
+    expect($service['command'])->toContain('--api=true', '--api.insecure=false', '--entrypoints.coolify-resource-sleep.address=127.0.0.1:18081')
+        ->and($service['command'])->not->toContain('--api.insecure=true')
+        ->and($service['ports'])->toBe(['80:80'])
+        ->and($proxy->managedConfiguration($server, $config))->toBe($config);
+});
