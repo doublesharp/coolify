@@ -165,6 +165,39 @@ it('renders and saves sleep settings through the authorized resource component',
     expect(ResourceSleepPolicy::where('resource_uuid', $application->uuid)->firstOrFail()->idle_timeout_seconds)->toBe(300);
 });
 
+it('saves database dependencies through the lifecycle API', function () {
+    $application = sleepApplication();
+    $database = StandalonePostgresql::create(['name' => 'sleep-dependency', 'postgres_password' => 'test-only-password', 'environment_id' => $application->environment_id, 'destination_id' => $application->destination_id, 'destination_type' => $application->destination_type]);
+    $this->withToken(sleepToken($application))->patchJson('/api/v1/resources/'.$application->uuid.'/sleep', [
+        'enabled' => true, 'dependencies' => [$database->uuid],
+    ])->assertOk()->assertJsonPath('dependencies', [$database->uuid]);
+    expect(ResourceSleepPolicy::where('resource_uuid', $application->uuid)->firstOrFail()->dependencies)->toBe([$database->uuid]);
+});
+
+it('saves database dependencies through the resource component', function () {
+    $application = sleepApplication();
+    $database = StandalonePostgresql::create(['name' => 'sleep-dependency', 'postgres_password' => 'test-only-password', 'environment_id' => $application->environment_id, 'destination_id' => $application->destination_id, 'destination_type' => $application->destination_type]);
+    sleepToken($application);
+    $this->actingAs(User::latest('id')->firstOrFail());
+    Livewire::test(ResourceSleepSettings::class, ['resource' => $application])
+        ->set('enabled', true)->set('dependencies', $database->uuid)->call('save')->assertHasNoErrors()->assertDispatched('success');
+    expect(ResourceSleepPolicy::where('resource_uuid', $application->uuid)->firstOrFail()->dependencies)->toBe([$database->uuid]);
+});
+
+it('rejects database dependencies without database management access', function (string $level) {
+    $application = sleepApplication();
+    $database = StandalonePostgresql::create(['name' => 'sleep-dependency', 'postgres_password' => 'test-only-password', 'environment_id' => $application->environment_id, 'destination_id' => $application->destination_id, 'destination_type' => $application->destination_type]);
+    $plain = sleepToken($application);
+    $application->environment->project->team->members()->updateExistingPivot(User::latest('id')->firstOrFail()->id, ['role' => 'member', 'access' => json_encode([
+        ['scope' => 'resource', 'uuid' => $application->uuid, 'levels' => ['write']],
+        ['scope' => 'resource', 'uuid' => $database->uuid, 'levels' => [$level]],
+    ])]);
+    $this->withToken($plain)->patchJson('/api/v1/resources/'.$application->uuid.'/sleep', [
+        'enabled' => true, 'dependencies' => [$database->uuid],
+    ])->assertForbidden();
+    expect(ResourceSleepPolicy::count())->toBe(0);
+})->with(['read', 'deploy']);
+
 it('rejects component changes from a reader', function () {
     $application = sleepApplication();
     $team = $application->environment->project->team;
