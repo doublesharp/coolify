@@ -41,6 +41,7 @@ use App\Http\Controllers\Api\ServicesController;
 use App\Http\Controllers\Api\SharedEnvironmentVariablesController;
 use App\Http\Controllers\Api\TagsController;
 use App\Http\Controllers\Api\TeamController;
+use App\Http\Controllers\Api\TrustedWorkflowTokenController;
 use App\Http\Controllers\Api\VolumeBackupsController;
 use App\Http\Controllers\Api\VultrController;
 use App\Http\Middleware\ApiAllowed;
@@ -59,6 +60,14 @@ Route::group([
 
 Route::post('/feedback', [OtherController::class, 'feedback'])
     ->middleware('throttle:feedback');
+
+// A CI job exchanges its OIDC token here; the request has no API token yet.
+Route::group([
+    'middleware' => [ApiAllowed::class, 'throttle:trusted-workflow-token'],
+    'prefix' => 'v1',
+], function () {
+    Route::post('/auth/oidc/token', [TrustedWorkflowTokenController::class, 'exchange']);
+});
 
 Route::group([
     'middleware' => ['api.ip.allowed', 'auth:sanctum', 'api.token.team', 'api.ability:write'],

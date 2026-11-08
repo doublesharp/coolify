@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Add trusted workflows: a CI job exchanges its OIDC token (for example GitHub Actions with `id-token: write`) at `POST /api/v1/auth/oidc/token` for a short-lived API token, so no API token has to be stored in the CI system
+  - Match the token issuer, audience, and claims; every trusted workflow needs the exact ID of one repository (`repository_id` on GitHub, `project_id` on GitLab), which does not change when the repository is renamed or transferred
+  - Fetch issuer keys only from public addresses, without redirects and with a size limit; only team admins and owners can trust an issuer other than GitHub Actions or GitLab.com
+  - Give the issued token the abilities and the projects, environments, or resources of the trusted workflow, never more access than its owner has in the team
+  - Exchange each OIDC token once, and record every issued token and every denied exchange in the audit log
+  - Manage trusted workflows on the API Tokens page; pausing or deleting one revokes the tokens it issued
+
 ## [v4.6.0] - 2026-11-02
 
 ### Breaking Changes

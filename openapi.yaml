@@ -15695,6 +15695,71 @@ paths:
       security:
         -
           bearerAuth: []
+  /auth/oidc/token:
+    post:
+      tags:
+        - Authentication
+      summary: 'Exchange a CI OIDC token'
+      description: 'Exchange the OIDC token of a CI job (for example GitHub Actions with `id-token: write`) for a short-lived API token. A trusted workflow of a team must match the token issuer, audience, and claims. The API token has the abilities and scopes of that trusted workflow and expires after its token lifetime. Each OIDC token can be exchanged once. No API token is needed for this request.'
+      operationId: exchange-oidc-token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              required:
+                - token
+              properties:
+                token:
+                  description: 'The OIDC token (JWT) issued to the CI job.'
+                  type: string
+                rule:
+                  description: 'UUID of the trusted workflow to use, when more than one matches.'
+                  type: string
+              type: object
+      responses:
+        '200':
+          description: 'A short-lived API token.'
+          content:
+            application/json:
+              schema:
+                properties:
+                  token: { type: string, example: 42|AbCdEf... }
+                  token_type: { type: string, example: Bearer }
+                  expires_at: { type: string, format: date-time }
+                  abilities: { type: array, items: { type: string }, example: [read, deploy] }
+                  scopes: { description: 'Projects, environments, or resources the token is limited to. Null for the whole team.', type: [array, 'null'], items: { properties: { scope: { type: string, enum: [project, environment, resource] }, uuid: { type: string } }, type: object } }
+                  trusted_workflow: { description: 'UUID of the trusted workflow that matched.', type: string }
+                type: object
+        '403':
+          description: 'No trusted workflow accepts this token, or the API is disabled for this address.'
+          content:
+            application/json:
+              schema:
+                properties:
+                  message: { type: string, example: 'Token exchange denied.' }
+                type: object
+        '409':
+          description: 'More than one trusted workflow matches. Send the UUID of one in `rule`.'
+          content:
+            application/json:
+              schema:
+                properties:
+                  message: { type: string }
+                type: object
+        '422':
+          $ref: '#/components/responses/422'
+        '429':
+          $ref: '#/components/responses/429'
+        '503':
+          description: 'The token issuer could not be reached.'
+          content:
+            application/json:
+              schema:
+                properties:
+                  message: { type: string }
+                type: object
+      security: []
   '/applications/{uuid}/storages/{storage_uuid}/backups':
     put:
       tags:
@@ -18215,6 +18280,9 @@ tags:
   -
     name: Teams
     description: Teams
+  -
+    name: Authentication
+    description: Authentication
   -
     name: Vultr
     description: Vultr
