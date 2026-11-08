@@ -243,6 +243,8 @@
                     @endif
                 </div>
             </x-application.settings-section>
+
+            <livewire:security.trusted-workflows />
         </div>
 
         @can('create', App\Models\PersonalAccessToken::class)

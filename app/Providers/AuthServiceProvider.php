@@ -42,6 +42,7 @@ use App\Models\SwarmDocker;
 use App\Models\Tag;
 use App\Models\Team;
 use App\Models\TelegramNotificationSettings;
+use App\Models\TrustedWorkflow;
 use App\Models\WebhookNotificationSettings;
 use App\Policies\ApiTokenPolicy;
 use App\Policies\ApplicationPolicy;
@@ -72,6 +73,7 @@ use App\Policies\StandaloneDockerPolicy;
 use App\Policies\SwarmDockerPolicy;
 use App\Policies\TagPolicy;
 use App\Policies\TeamPolicy;
+use App\Policies\TrustedWorkflowPolicy;
 use Illuminate\Foundation\Support\Providers\AuthServiceProvider as ServiceProvider;
 use Illuminate\Support\Facades\Gate;
 use Laravel\Sanctum\PersonalAccessToken;
@@ -119,6 +121,7 @@ class AuthServiceProvider extends ServiceProvider
 
         // API Token policy
         PersonalAccessToken::class => ApiTokenPolicy::class,
+        TrustedWorkflow::class => TrustedWorkflowPolicy::class,
 
         // Instance settings policy
         InstanceSettings::class => InstanceSettingsPolicy::class,
