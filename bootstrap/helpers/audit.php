@@ -78,6 +78,7 @@ if (! function_exists('auditFailureDeduplicationWindow')) {
         return match (true) {
             $event === 'auth.user.login_failed' => 60,
             $event === 'api.auth.unauthenticated',
+            $event === 'api.trusted_workflow.exchange_denied',
             preg_match('/^webhook\.[a-z0-9_-]+\.signature_failed$/i', $event) === 1 => 300,
             default => null,
         };

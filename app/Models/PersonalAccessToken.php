@@ -16,6 +16,7 @@ class PersonalAccessToken extends SanctumPersonalAccessToken
         'team_id',
         'scopes',
         'paused_at',
+        'trusted_workflow_id',
     ];
 
     protected function casts(): array
@@ -25,6 +26,19 @@ class PersonalAccessToken extends SanctumPersonalAccessToken
             'scopes' => 'array',
             'paused_at' => 'datetime',
         ];
+    }
+
+    /**
+     * The trusted workflow that issued this short-lived token, if any.
+     */
+    public function trustedWorkflow()
+    {
+        return $this->belongsTo(TrustedWorkflow::class);
+    }
+
+    public function isIssuedByTrustedWorkflow(): bool
+    {
+        return $this->trusted_workflow_id !== null;
     }
 
     /**

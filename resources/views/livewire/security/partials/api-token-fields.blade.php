@@ -1,13 +1,16 @@
 {{--
     Fields of an ApiTokenForm. $form is the form property ('form' or 'editForm'). Everything that depends on
     the values reads them from $wire, because the browser fills the edit form without a request.
+    $showNameAndExpiry false leaves out the description and expiry, for forms that have their own.
 --}}
-<div class="grid gap-4 lg:grid-cols-2">
-    <x-forms.input required id="{{ $form }}.description" label="Description"
-        placeholder="CI deployment token" />
-    <x-forms.listbox id="{{ $form }}.expiresInDays" label="Expires in" :options="$expiryOptions"
-        :x-effect="$form === 'editForm' ? 'options[0].label = editingToken?.keepLabel ?? options[0].label' : null" />
-</div>
+@if ($showNameAndExpiry ?? true)
+    <div class="grid gap-4 lg:grid-cols-2">
+        <x-forms.input required id="{{ $form }}.description" label="Description"
+            placeholder="CI deployment token" />
+        <x-forms.listbox id="{{ $form }}.expiresInDays" label="Expires in" :options="$expiryOptions"
+            :x-effect="$form === 'editForm' ? 'options[0].label = editingToken?.keepLabel ?? options[0].label' : null" />
+    </div>
+@endif
 
 <div class="mt-4 border-t border-neutral-200 pt-3 dark:border-white/[0.08]">
     <div class="mb-2 flex items-center gap-2">
