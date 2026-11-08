@@ -129,15 +129,16 @@ it('rejects workload discovery documents that are unsafe or incomplete', functio
     'no keys' => [['issuer' => 'https://ci.example.com']],
 ]);
 
-it('bounds the token lifetime by its own iat and exp', function (array $times, string $message) {
-    $signed = workloadEs256(workloadClaims($times));
+it('bounds the token lifetime by its own iat and exp', function (array $offsets, string $message) {
+    // Offsets from the moment the test runs, so a slow suite cannot turn these into expired tokens.
+    $signed = workloadEs256(workloadClaims(array_map(fn (int $offset) => time() + $offset, $offsets)));
 
     expect(fn () => app(WorkloadTokenValidator::class)->validate($signed['token'], 'https://ci.example.com', $signed['jwks']))
         ->toThrow(OidcTokenException::class, $message);
 })->with([
-    'exp before iat' => [['iat' => time(), 'exp' => time() - 1], 'expires before it was issued'],
-    'exp equal to iat' => [['iat' => time() - 10, 'exp' => time() - 10], 'expires before it was issued'],
-    'issued long ago, expires soon' => [['iat' => time() - 7200, 'exp' => time() + 60], 'longer than allowed'],
+    'exp before iat' => [['iat' => 20, 'exp' => 10], 'expires before it was issued'],
+    'exp equal to iat' => [['iat' => 10, 'exp' => 10], 'expires before it was issued'],
+    'issued long ago, expires soon' => [['iat' => -7200, 'exp' => 60], 'longer than allowed'],
 ]);
 
 it('fetches workload issuers only from public addresses', function () {
