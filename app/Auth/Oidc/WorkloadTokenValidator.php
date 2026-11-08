@@ -140,7 +140,12 @@ class WorkloadTokenValidator
             }
         }
 
-        if ((int) $claims['exp'] - time() > self::MAX_LIFETIME_SECONDS + $clockSkewSeconds) {
+        $expiresAt = (int) $claims['exp'];
+        $issuedAt = (int) $claims['iat'];
+        if ($expiresAt <= $issuedAt) {
+            throw new OidcTokenException('Token expires before it was issued.');
+        }
+        if ($expiresAt - $issuedAt > self::MAX_LIFETIME_SECONDS || $expiresAt - time() > self::MAX_LIFETIME_SECONDS + $clockSkewSeconds) {
             throw new OidcTokenException('Token is valid for longer than allowed.');
         }
     }

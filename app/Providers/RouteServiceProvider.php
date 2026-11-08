@@ -56,7 +56,7 @@ class RouteServiceProvider extends ServiceProvider
         });
 
         RateLimiter::for('trusted-workflow-token', function (Request $request) {
-            return Limit::perMinute(60)->by('trusted-workflow-token:'.client_ip($request));
+            return Limit::perMinute(20)->by('trusted-workflow-token:'.client_ip($request));
         });
 
         RateLimiter::for('feedback', function (Request $request) {

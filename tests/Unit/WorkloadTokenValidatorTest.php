@@ -1,6 +1,7 @@
 <?php
 
 use App\Auth\Oidc\Exceptions\OidcDiscoveryException;
+use App\Auth\Oidc\Exceptions\OidcJwksException;
 use App\Auth\Oidc\Exceptions\OidcSigningKeyNotFoundException;
 use App\Auth\Oidc\Exceptions\OidcTokenException;
 use App\Auth\Oidc\OidcDiscoveryService;
@@ -102,6 +103,7 @@ it('reads the issuer without verifying, and only from well-formed tokens', funct
 
 it('discovers a workload issuer that publishes no login endpoints', function () {
     Cache::flush();
+    app()->instance(OidcDiscoveryService::class, new OidcDiscoveryService(fn (string $host) => ['140.82.112.21']));
     Http::fake([
         'https://ci.example.com/.well-known/openid-configuration' => Http::response([
             'issuer' => 'https://ci.example.com',
@@ -117,6 +119,7 @@ it('discovers a workload issuer that publishes no login endpoints', function () 
 
 it('rejects workload discovery documents that are unsafe or incomplete', function (array $document) {
     Cache::flush();
+    app()->instance(OidcDiscoveryService::class, new OidcDiscoveryService(fn (string $host) => ['140.82.112.21']));
     Http::fake(['https://ci.example.com/.well-known/openid-configuration' => Http::response($document)]);
 
     app(OidcDiscoveryService::class)->issuerMetadata('https://ci.example.com');
@@ -125,3 +128,25 @@ it('rejects workload discovery documents that are unsafe or incomplete', functio
     'plain HTTP keys' => [['issuer' => 'https://ci.example.com', 'jwks_uri' => 'http://ci.example.com/keys']],
     'no keys' => [['issuer' => 'https://ci.example.com']],
 ]);
+
+it('bounds the token lifetime by its own iat and exp', function (array $times, string $message) {
+    $signed = workloadEs256(workloadClaims($times));
+
+    expect(fn () => app(WorkloadTokenValidator::class)->validate($signed['token'], 'https://ci.example.com', $signed['jwks']))
+        ->toThrow(OidcTokenException::class, $message);
+})->with([
+    'exp before iat' => [['iat' => time(), 'exp' => time() - 1], 'expires before it was issued'],
+    'exp equal to iat' => [['iat' => time() - 10, 'exp' => time() - 10], 'expires before it was issued'],
+    'issued long ago, expires soon' => [['iat' => time() - 7200, 'exp' => time() + 60], 'longer than allowed'],
+]);
+
+it('fetches workload issuers only from public addresses', function () {
+    Cache::flush();
+    Http::fake();
+
+    $service = new OidcDiscoveryService(fn (string $host) => ['192.168.1.10']);
+
+    expect(fn () => $service->issuerMetadata('https://ci.example.com'))->toThrow(OidcDiscoveryException::class, 'Refusing to fetch');
+    expect(fn () => $service->workloadJwks('https://ci.example.com/keys'))->toThrow(OidcJwksException::class, 'Refusing to fetch');
+    Http::assertNothingSent();
+});

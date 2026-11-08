@@ -70,7 +70,12 @@ class TrustedWorkflows extends Component
                 'issuer' => ['required', 'string', 'max:255', 'url:https'],
                 'audience' => ['required', 'string', 'max:255'],
                 'tokenLifetimeMinutes' => ['required', 'integer', Rule::in(array_keys($this->lifetimeOptions))],
-                'repositoryId' => ['nullable', 'regex:/^[0-9]+$/'],
+                // GitHub Actions rules always pin one repository by its ID.
+                'repositoryId' => [
+                    Rule::requiredIf(fn () => rtrim($this->form->issuer, '/') === TrustedWorkflow::DEFAULT_ISSUER),
+                    'nullable',
+                    'regex:/^[0-9]+$/',
+                ],
                 'repositoryOwnerId' => ['nullable', 'regex:/^[0-9]+$/'],
                 'permissions' => 'required|array|min:1',
                 'permissions.*' => ['required', 'string', Rule::in(TrustedWorkflowTokenExchange::ALLOWED_ABILITIES)],
@@ -80,9 +85,17 @@ class TrustedWorkflows extends Component
             ], [
                 'description.required' => 'Name the trusted workflow.',
                 'selectedScopes.required' => 'Select at least one project, environment, or resource.',
+                'repositoryId.required' => 'Enter the repository ID. Find it with: gh api repos/OWNER/REPO --jq .id',
                 'repositoryId.regex' => 'The repository ID is a number.',
                 'repositoryOwnerId.regex' => 'The owner ID is a number.',
             ]);
+
+            $issuer = rtrim($validated['issuer'], '/');
+            if (! in_array($issuer, TrustedWorkflow::PRESET_ISSUERS, true) && ! auth()->user()->isAdminOfTeam($teamId)) {
+                $this->addError('form.issuer', 'Only team admins and owners can trust an issuer other than GitHub Actions or GitLab.com.');
+
+                return;
+            }
 
             ['conditions' => $conditions, 'problems' => $problems] = $this->form->conditions();
             $problems = [...$problems, ...ClaimConditions::problems($conditions)];
@@ -98,7 +111,7 @@ class TrustedWorkflows extends Component
                 'team_id' => $teamId,
                 'user_id' => auth()->id(),
                 'name' => $validated['description'],
-                'issuer' => rtrim($validated['issuer'], '/'),
+                'issuer' => $issuer,
                 'audience' => $validated['audience'],
                 'conditions' => $conditions,
                 'abilities' => $permissions,
@@ -139,13 +152,20 @@ class TrustedWorkflows extends Component
             $workflow = $this->findWorkflow($uuid);
             $this->authorize('update', $workflow);
 
-            if ($workflow->isPaused() !== $paused) {
-                DB::transaction(function () use ($workflow, $paused): void {
-                    $workflow->forceFill(['paused_at' => $paused ? now() : null])->save();
-                    if ($paused) {
-                        PersonalAccessToken::query()->where('trusted_workflow_id', $workflow->id)->delete();
-                    }
-                });
+            // The exchange locks the same row while it issues a token, so no token is issued after the pause.
+            $changed = DB::transaction(function () use ($workflow, $paused): bool {
+                $locked = TrustedWorkflow::query()->whereKey($workflow->id)->lockForUpdate()->firstOrFail();
+                if ($locked->isPaused() === $paused) {
+                    return false;
+                }
+                $locked->forceFill(['paused_at' => $paused ? now() : null])->save();
+                if ($paused) {
+                    PersonalAccessToken::query()->where('trusted_workflow_id', $locked->id)->delete();
+                }
+
+                return true;
+            });
+            if ($changed) {
                 auditLog($paused ? 'ui.trusted_workflow.paused' : 'ui.trusted_workflow.resumed', [
                     'team_id' => $workflow->team_id,
                     'trusted_workflow_uuid' => $workflow->uuid,
@@ -169,8 +189,9 @@ class TrustedWorkflows extends Component
             $this->authorize('delete', $workflow);
 
             DB::transaction(function () use ($workflow): void {
-                PersonalAccessToken::query()->where('trusted_workflow_id', $workflow->id)->delete();
-                $workflow->delete();
+                $locked = TrustedWorkflow::query()->whereKey($workflow->id)->lockForUpdate()->firstOrFail();
+                PersonalAccessToken::query()->where('trusted_workflow_id', $locked->id)->delete();
+                $locked->delete();
             });
             auditLog('ui.trusted_workflow.deleted', [
                 'team_id' => $workflow->team_id,

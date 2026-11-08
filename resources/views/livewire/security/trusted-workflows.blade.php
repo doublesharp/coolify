@@ -113,7 +113,7 @@
                         ->values()
                         ->all()" />
                     <x-forms.input required id="form.issuer" label="Issuer"
-                        helper="The OIDC issuer of the CI system. GitHub Actions: https://token.actions.githubusercontent.com" />
+                        helper="The OIDC issuer of the CI system. GitHub Actions: https://token.actions.githubusercontent.com. GitLab.com: https://gitlab.com. Only team admins and owners can trust another issuer." />
                     <x-forms.input required id="form.audience" label="Audience"
                         helper="The audience the CI job requests its token for. Use a value only this Coolify instance accepts, such as its URL." />
                 </div>
@@ -121,10 +121,10 @@
                 <div class="border-t border-neutral-200 pt-3 dark:border-white/[0.08]">
                     <div class="mb-2 flex items-center gap-2">
                         <h4 class="text-[12px] font-semibold text-black dark:text-fg">Conditions</h4>
-                        <x-helper helper="Every condition must match a claim of the token. A value with * matches any characters. The repository ID does not change when a repository is renamed or transferred. Find it with: gh api repos/OWNER/REPO --jq .id" />
+                        <x-helper helper="Every condition must match a claim of the token. A value with * matches any characters. Every rule needs the exact ID of one repository: repository_id for GitHub (required here), project_id for GitLab. It does not change when the repository is renamed or transferred. Find a GitHub ID with: gh api repos/OWNER/REPO --jq .id" />
                     </div>
                     <div class="grid gap-4 lg:grid-cols-2">
-                        <x-forms.input id="form.repositoryId" label="Repository ID" placeholder="123456789" />
+                        <x-forms.input id="form.repositoryId" label="Repository ID (GitHub)" placeholder="123456789" />
                         <x-forms.input id="form.repositoryOwnerId" label="Owner ID (optional)" placeholder="987654" />
                         <x-forms.input id="form.ref" label="Branch or tag" placeholder="refs/heads/main or refs/tags/v*" />
                         <x-forms.input id="form.workflowPath" label="Workflow file (optional)"
@@ -134,7 +134,7 @@
                     <div class="mt-4">
                         <x-forms.textarea id="form.extraConditions" label="More conditions (optional)" monospace
                             placeholder="environment=production&#10;runner_environment=github-hosted"
-                            helper="One claim=value per line. Use this for other CI systems, for example project_id=42 for GitLab." />
+                            helper="One claim=value per line. For GitLab, add project_id=42. An owner or namespace ID can only narrow a rule further." />
                     </div>
                 </div>
 

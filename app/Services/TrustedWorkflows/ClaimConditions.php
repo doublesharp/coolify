@@ -11,11 +11,12 @@ namespace App\Services\TrustedWorkflows;
 final class ClaimConditions
 {
     /**
-     * Claims that name a repository, project or owner by an ID that never changes, also when it is renamed
-     * or transferred. Every rule needs one of them with an exact value, so a renamed or recreated
-     * repository with the same name can never match.
+     * Claims that name one repository or project by an ID that never changes, also when it is renamed or
+     * transferred (GitHub `repository_id`, GitLab `project_id`). Every rule needs one of them with an exact
+     * value, so neither a recreated repository with the same name nor another repository of the same owner
+     * can match. Owner and namespace IDs cover many repositories, so they are only extra conditions.
      */
-    public const IDENTITY_CLAIMS = ['repository_id', 'repository_owner_id', 'project_id', 'namespace_id'];
+    public const IDENTITY_CLAIMS = ['repository_id', 'project_id'];
 
     /**
      * Claims that the exchange checks itself.
@@ -65,7 +66,7 @@ final class ClaimConditions
         }
 
         if (! $hasIdentity) {
-            $problems[] = 'Add an exact '.implode(', ', self::IDENTITY_CLAIMS).' condition, so a renamed repository can never match.';
+            $problems[] = 'Add an exact repository_id (GitHub) or project_id (GitLab) condition. It names one repository and does not change when the repository is renamed or transferred.';
         }
 
         return array_values(array_unique($problems));

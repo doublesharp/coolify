@@ -53,11 +53,8 @@ class TrustedWorkflowTokenExchange
         }
 
         // Only issuers that a rule names are ever contacted, so a caller cannot make Coolify fetch other URLs.
-        $rules = TrustedWorkflow::query()
-            ->where('issuer', $issuer)
-            ->when($ruleUuid !== null, fn ($query) => $query->where('uuid', $ruleUuid))
-            ->get();
-        if ($rules->isEmpty()) {
+        // Nothing else is read before the signature is verified.
+        if (! TrustedWorkflow::query()->where('issuer', $issuer)->exists()) {
             throw new TrustedWorkflowExchangeDenied('no_rule_for_issuer', context: ['issuer' => $issuer]);
         }
 
@@ -65,8 +62,12 @@ class TrustedWorkflowTokenExchange
         $audiences = WorkloadTokenValidator::audiences($claims);
         $context = ['issuer' => $issuer, 'claims' => self::auditedClaims($claims)];
 
-        $matching = $rules->filter(fn (TrustedWorkflow $rule) => in_array($rule->audience, $audiences, true)
-            && ClaimConditions::matches($rule->conditions ?? [], $claims));
+        $matching = TrustedWorkflow::query()
+            ->where('issuer', $claims['iss'])
+            ->whereIn('audience', $audiences)
+            ->when($ruleUuid !== null, fn ($query) => $query->where('uuid', $ruleUuid))
+            ->get()
+            ->filter(fn (TrustedWorkflow $rule) => ClaimConditions::matches($rule->conditions ?? [], $claims));
         if ($matching->isEmpty()) {
             throw new TrustedWorkflowExchangeDenied('no_matching_rule', context: $context);
         }
@@ -92,7 +93,7 @@ class TrustedWorkflowTokenExchange
             throw new TrustedWorkflowExchangeDenied('owner_access', context: $context);
         }
 
-        return $this->mint($rule, $claims);
+        return $this->mint($rule, $claims, $context);
     }
 
     /**
@@ -138,10 +139,10 @@ class TrustedWorkflowTokenExchange
         try {
             $metadata = $this->discovery->issuerMetadata($issuer);
             try {
-                return $this->validator->validate($jwt, $metadata->issuer, $this->discovery->jwks($metadata->jwksUri));
+                return $this->validator->validate($jwt, $metadata->issuer, $this->discovery->workloadJwks($metadata->jwksUri));
             } catch (OidcSigningKeyNotFoundException) {
                 // The issuer may have rotated its keys since the JWKS was cached.
-                return $this->validator->validate($jwt, $metadata->issuer, $this->discovery->jwks($metadata->jwksUri, forceRefresh: true));
+                return $this->validator->validate($jwt, $metadata->issuer, $this->discovery->workloadJwks($metadata->jwksUri, forceRefresh: true));
             }
         } catch (OidcDiscoveryException|OidcJwksException $e) {
             throw new TrustedWorkflowExchangeDenied('issuer_unavailable', 503, $e->getMessage(), ['issuer' => $issuer]);
@@ -164,30 +165,42 @@ class TrustedWorkflowTokenExchange
 
     /**
      * @param  array<string, mixed>  $claims
+     * @param  array<string, mixed>  $context  audit context of a denial
      * @return array{token: string, expires_at: string, abilities: list<string>, scopes: list<array{scope: string, uuid: string}>|null, trusted_workflow: TrustedWorkflow, claims: array<string, mixed>, token_id: int}
      */
-    private function mint(TrustedWorkflow $rule, array $claims): array
+    private function mint(TrustedWorkflow $rule, array $claims, array $context): array
     {
-        $lifetime = max(1, min((int) $rule->token_lifetime_minutes, TrustedWorkflow::MAX_TOKEN_LIFETIME_MINUTES));
-        $expiresAt = now()->addMinutes($lifetime);
-        $abilities = array_values($rule->abilities ?? []);
-        $scopes = $rule->scopes === null
-            ? null
-            : array_map(fn (Grant $scope) => ['scope' => $scope->scope->value, 'uuid' => $scope->uuid], Grant::listFrom($rule->scopes));
+        $minted = DB::transaction(function () use ($rule, $context) {
+            // Pausing and deleting lock the same row, so a token is never issued after a pause or a delete
+            // has revoked the rule's tokens. Mint from the locked row, not from the row read before.
+            $locked = TrustedWorkflow::query()->whereKey($rule->getKey())->lockForUpdate()->first();
+            if ($locked === null || $locked->isPaused()) {
+                throw new TrustedWorkflowExchangeDenied($locked === null ? 'rule_deleted' : 'rule_paused', context: $context);
+            }
+            if (! $this->ownerCanGrant($locked)) {
+                throw new TrustedWorkflowExchangeDenied('owner_access', context: $context);
+            }
 
-        $newToken = DB::transaction(function () use ($rule, $abilities, $scopes, $expiresAt) {
             // Tokens of this rule that expired are removed here too, not only by the hourly prune.
             PersonalAccessToken::query()
-                ->where('trusted_workflow_id', $rule->id)
+                ->where('trusted_workflow_id', $locked->id)
                 ->where('expires_at', '<', now())
                 ->delete();
 
-            $newToken = $rule->owner->createToken(mb_substr($rule->name.' (trusted workflow)', 0, 255), $abilities, $expiresAt, $rule->team_id);
-            $newToken->accessToken->forceFill(['scopes' => $scopes, 'trusted_workflow_id' => $rule->id])->save();
-            $rule->forceFill(['last_used_at' => now()])->saveQuietly();
+            $lifetime = max(1, min((int) $locked->token_lifetime_minutes, TrustedWorkflow::MAX_TOKEN_LIFETIME_MINUTES));
+            $expiresAt = now()->addMinutes($lifetime);
+            $abilities = array_values($locked->abilities ?? []);
+            $scopes = $locked->scopes === null
+                ? null
+                : array_map(fn (Grant $scope) => ['scope' => $scope->scope->value, 'uuid' => $scope->uuid], Grant::listFrom($locked->scopes));
 
-            return $newToken;
+            $newToken = $locked->owner->createToken(mb_substr($locked->name.' (trusted workflow)', 0, 255), $abilities, $expiresAt, $locked->team_id);
+            $newToken->accessToken->forceFill(['scopes' => $scopes, 'trusted_workflow_id' => $locked->id])->save();
+            $locked->forceFill(['last_used_at' => now()])->saveQuietly();
+
+            return [$newToken, $locked, $abilities, $scopes, $expiresAt];
         });
+        [$newToken, $rule, $abilities, $scopes, $expiresAt] = $minted;
 
         return [
             'token' => $newToken->plainTextToken,

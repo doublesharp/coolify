@@ -1,5 +1,7 @@
 <?php
 
+use App\Auth\Oidc\OidcDiscoveryService;
+use App\Auth\Oidc\WorkloadTokenValidator;
 use App\Jobs\ApiTokenExpirationWarningJob;
 use App\Livewire\Security\ApiTokens;
 use App\Models\Application;
@@ -12,6 +14,8 @@ use App\Models\Server;
 use App\Models\Team;
 use App\Models\TrustedWorkflow;
 use App\Models\User;
+use App\Services\Access\AccessResolver;
+use App\Services\TrustedWorkflows\TrustedWorkflowTokenExchange;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Facades\Cache;
@@ -56,9 +60,17 @@ beforeEach(function () {
     $this->shopApi = $makeApp('shop-api');
     $this->shopWorker = $makeApp('shop-worker');
 
+    // Workload issuers are fetched with DNS checks; resolve test hosts to a public address without real DNS.
+    twResolveTo('140.82.112.21');
+
     $this->key = twKeyPair('key-1');
     twFakeIssuer([$this->key['jwk']]);
 });
+
+function twResolveTo(string ...$ips): void
+{
+    app()->instance(OidcDiscoveryService::class, new OidcDiscoveryService(fn (string $host) => $ips));
+}
 
 afterEach(function () {
     Server::flushIdentityMap();
@@ -247,6 +259,8 @@ test('denies tokens that fail verification', function (Closure $makeToken) {
     'expired' => [fn ($key) => twSign(twClaims(['iat' => time() - 900, 'nbf' => time() - 900, 'exp' => time() - 600]), $key['private_pem'])],
     'not yet valid' => [fn ($key) => twSign(twClaims(['nbf' => time() + 600]), $key['private_pem'])],
     'valid for too long' => [fn ($key) => twSign(twClaims(['exp' => time() + 7200]), $key['private_pem'])],
+    'issued more than an hour before it expires' => [fn ($key) => twSign(twClaims(['iat' => time() - 7000, 'nbf' => time() - 7000, 'exp' => time() + 120]), $key['private_pem'])],
+    'expires before it was issued' => [fn ($key) => twSign(twClaims(['iat' => time() + 20, 'nbf' => time(), 'exp' => time() + 10]), $key['private_pem'])],
     'wrong audience' => [fn ($key) => twSign(twClaims(['aud' => 'https://github.com/acme']), $key['private_pem'])],
     'without jti' => [fn ($key) => twSign(Arr::except(twClaims(), 'jti'), $key['private_pem'])],
     'alg none' => [fn ($key) => twBase64Url(json_encode(['alg' => 'none', 'kid' => 'key-1'])).'.'.twBase64Url(json_encode(twClaims())).'.'],
@@ -399,4 +413,73 @@ test('minted tokens are not listed with API tokens and get no expiry warning', f
 
     (new ApiTokenExpirationWarningJob)->handle();
     expect(PersonalAccessToken::query()->whereNotNull('trusted_workflow_id')->whereNotNull('api_token_expiration_warning_sent_at')->exists())->toBeFalse();
+});
+
+test('refuses issuers that resolve to private, loopback, or metadata addresses', function (string $ip) {
+    twResolveTo($ip);
+    twRule($this->team, $this->admin);
+
+    twExchange(twSign(twClaims(), $this->key['private_pem']))->assertStatus(503);
+
+    Http::assertNothingSent();
+    expect(PersonalAccessToken::query()->count())->toBe(0);
+})->with(['private' => '10.0.0.5', 'loopback' => '127.0.0.1', 'link-local metadata' => '169.254.169.254']);
+
+test('does not follow redirects from a workload issuer', function () {
+    Http::swap(new Factory);
+    Http::fake([
+        TW_ISSUER.'/.well-known/openid-configuration' => Http::response('', 302, ['Location' => 'http://169.254.169.254/latest/meta-data']),
+        '*' => Http::response(['issuer' => TW_ISSUER, 'jwks_uri' => TW_JWKS]),
+    ]);
+    twRule($this->team, $this->admin);
+
+    twExchange(twSign(twClaims(), $this->key['private_pem']))->assertStatus(503);
+
+    Http::assertSentCount(1);
+});
+
+test('refuses a JWKS larger than the size limit', function () {
+    Http::swap(new Factory);
+    Http::fake([
+        TW_ISSUER.'/.well-known/openid-configuration' => Http::response(['issuer' => TW_ISSUER, 'jwks_uri' => TW_JWKS]),
+        TW_JWKS => Http::response(json_encode(['keys' => [test()->key['jwk']], 'padding' => str_repeat('x', 1048576)])),
+    ]);
+    twRule($this->team, $this->admin);
+
+    twExchange(twSign(twClaims(), $this->key['private_pem']))->assertStatus(503);
+    expect(PersonalAccessToken::query()->count())->toBe(0);
+});
+
+test('issues no token when the rule is paused while the exchange runs', function () {
+    $rule = twRule($this->team, $this->admin);
+    $exchange = Mockery::mock(TrustedWorkflowTokenExchange::class, [
+        app(OidcDiscoveryService::class),
+        app(WorkloadTokenValidator::class),
+        app(AccessResolver::class),
+    ])->makePartial();
+    $calls = 0;
+    // A pause commits after the first access check and before the token is written.
+    $exchange->shouldReceive('ownerCanGrant')->andReturnUsing(function () use ($rule, &$calls) {
+        if (++$calls === 1) {
+            TrustedWorkflow::query()->whereKey($rule->id)->update(['paused_at' => now()]);
+        }
+
+        return true;
+    });
+    $this->app->instance(TrustedWorkflowTokenExchange::class, $exchange);
+
+    twExchange(twSign(twClaims(), $this->key['private_pem']))->assertForbidden();
+
+    expect(PersonalAccessToken::query()->count())->toBe(0)
+        ->and(data_get(AuditEvent::query()->where('event', 'api.trusted_workflow.exchange_denied')->sole()->metadata, 'reason'))->toBe('rule_paused');
+});
+
+test('limits exchange attempts per address', function () {
+    twRule($this->team, $this->admin);
+
+    foreach (range(1, 20) as $attempt) {
+        twExchange('not-a-jwt')->assertForbidden();
+    }
+
+    twExchange('not-a-jwt')->assertStatus(429);
 });

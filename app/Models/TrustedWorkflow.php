@@ -12,6 +12,14 @@ class TrustedWorkflow extends BaseModel
 {
     public const DEFAULT_ISSUER = 'https://token.actions.githubusercontent.com';
 
+    public const GITLAB_ISSUER = 'https://gitlab.com';
+
+    /**
+     * Issuers any member may trust. Another issuer makes Coolify fetch a URL that a member chose,
+     * so only team admins and owners can add it.
+     */
+    public const PRESET_ISSUERS = [self::DEFAULT_ISSUER, self::GITLAB_ISSUER];
+
     public const DEFAULT_TOKEN_LIFETIME_MINUTES = 10;
 
     public const MAX_TOKEN_LIFETIME_MINUTES = 60;

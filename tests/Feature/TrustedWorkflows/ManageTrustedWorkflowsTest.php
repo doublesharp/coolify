@@ -116,22 +116,48 @@ test('creates a trusted workflow from the GitHub fields', function () {
         ->and(AuditEvent::query()->where('event', 'ui.trusted_workflow.created')->exists())->toBeTrue();
 });
 
-test('requires an exact repository or project ID', function (array $fields) {
+test('requires an exact repository or project ID', function (array $fields, string $errorField) {
     manageTwActingAs($this->admin, $this->team);
 
     Livewire::test(TrustedWorkflows::class)
         ->set('form.description', 'Deploy')
         ->set($fields)
         ->call('addTrustedWorkflow')
-        ->assertHasErrors('form.extraConditions');
+        ->assertHasErrors($errorField);
 
     expect(TrustedWorkflow::query()->count())->toBe(0);
 })->with([
-    'no ID' => [['form.repositoryId' => '']],
-    'ID with a glob' => [['form.repositoryId' => '', 'form.extraConditions' => 'project_id=4*']],
-    'reserved claim' => [['form.repositoryId' => '1', 'form.extraConditions' => 'aud=https://example.com']],
-    'malformed line' => [['form.repositoryId' => '1', 'form.extraConditions' => 'environment']],
+    'GitHub without repository ID' => [['form.repositoryId' => ''], 'form.repositoryId'],
+    'GitHub with only an owner ID' => [['form.repositoryId' => '', 'form.repositoryOwnerId' => '999', 'form.workflowPath' => '.github/workflows/deploy.yml'], 'form.repositoryId'],
+    'GitLab without project ID' => [['form.issuer' => 'https://gitlab.com', 'form.repositoryId' => '', 'form.ref' => 'main'], 'form.extraConditions'],
+    'GitLab with only a namespace ID' => [['form.issuer' => 'https://gitlab.com', 'form.repositoryId' => '', 'form.extraConditions' => 'namespace_id=5'], 'form.extraConditions'],
+    'ID with a glob' => [['form.issuer' => 'https://gitlab.com', 'form.repositoryId' => '', 'form.extraConditions' => 'project_id=4*'], 'form.extraConditions'],
+    'reserved claim' => [['form.repositoryId' => '1', 'form.extraConditions' => 'aud=https://example.com'], 'form.extraConditions'],
+    'malformed line' => [['form.repositoryId' => '1', 'form.extraConditions' => 'environment'], 'form.extraConditions'],
 ]);
+
+test('only team admins and owners can trust an issuer other than GitHub and GitLab.com', function () {
+    $member = manageTwMember($this->team, [['scope' => 'project', 'uuid' => $this->shop->uuid, 'levels' => ['read']]]);
+    $create = fn (string $issuer, string $conditions) => Livewire::test(TrustedWorkflows::class)
+        ->set('form.description', 'Deploy')
+        ->set('form.issuer', $issuer)
+        ->set('form.repositoryId', '')
+        ->set('form.extraConditions', $conditions)
+        ->set('form.permissions', ['read'])
+        ->set('form.scopeMode', 'selected')
+        ->set('form.selectedScopes', ["project:{$this->shop->uuid}"])
+        ->call('addTrustedWorkflow');
+
+    manageTwActingAs($member, $this->team);
+    $create('https://ci.example.com', 'project_id=1')->assertHasErrors('form.issuer');
+    expect(TrustedWorkflow::query()->count())->toBe(0);
+    $create('https://gitlab.com', 'project_id=1')->assertHasNoErrors();
+    expect(TrustedWorkflow::query()->count())->toBe(1);
+
+    manageTwActingAs($this->admin, $this->team);
+    $create('https://ci.example.com', 'project_id=2')->assertHasNoErrors();
+    expect(TrustedWorkflow::query()->where('issuer', 'https://ci.example.com')->exists())->toBeTrue();
+});
 
 test('rejects an issuer that is not HTTPS', function () {
     manageTwActingAs($this->admin, $this->team);
