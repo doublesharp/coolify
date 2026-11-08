@@ -55,6 +55,10 @@ class RouteServiceProvider extends ServiceProvider
             return Limit::perMinute(5)->by($request->user()?->id ?: client_ip($request));
         });
 
+        RateLimiter::for('trusted-workflow-token', function (Request $request) {
+            return Limit::perMinute(60)->by('trusted-workflow-token:'.client_ip($request));
+        });
+
         RateLimiter::for('feedback', function (Request $request) {
             return Limit::perMinute(3)->by($request->user()?->id ?: client_ip($request));
         });

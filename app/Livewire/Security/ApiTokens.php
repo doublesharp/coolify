@@ -50,6 +50,8 @@ class ApiTokens extends Component
     {
         $this->tokens = auth()->user()->tokens()
             ->where('team_id', currentTeam()->id)
+            // Short-lived tokens of trusted workflows are listed with their workflow, not here.
+            ->whereNull('trusted_workflow_id')
             ->latest()
             ->get();
     }
@@ -161,6 +163,7 @@ class ApiTokens extends Component
     {
         return auth()->user()->tokens()
             ->where('team_id', currentTeam()->id)
+            ->whereNull('trusted_workflow_id')
             ->where('id', $id)
             ->firstOrFail();
     }

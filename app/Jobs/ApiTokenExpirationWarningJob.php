@@ -31,6 +31,8 @@ class ApiTokenExpirationWarningJob implements ShouldBeEncrypted, ShouldQueue, Si
             ->where('expires_at', '>', now())
             ->where('expires_at', '<=', now()->addDays(self::WARNING_DAYS))
             ->whereNull('api_token_expiration_warning_sent_at')
+            // Tokens of trusted workflows live for minutes; nobody needs a warning for them.
+            ->whereNull('trusted_workflow_id')
             ->where('tokenable_type', User::class)
             ->chunkById(100, function ($tokens) {
                 foreach ($tokens as $token) {

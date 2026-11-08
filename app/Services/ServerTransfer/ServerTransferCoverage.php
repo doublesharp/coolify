@@ -70,6 +70,7 @@ use App\Models\Tag;
 use App\Models\Team;
 use App\Models\TeamInvitation;
 use App\Models\TelegramNotificationSettings;
+use App\Models\TrustedWorkflow;
 use App\Models\User;
 use App\Models\UserChangelogRead;
 use App\Models\VolumeBackupS3Replica;
@@ -328,6 +329,7 @@ final class ServerTransferCoverage
         OauthSetting::class => 'Settings of the source instance.',
         OauthIdentity::class => 'User login data of the source instance.',
         PersonalAccessToken::class => 'API tokens of the source instance.',
+        TrustedWorkflow::class => 'API access rules of the source instance.',
         UserChangelogRead::class => 'User data of the source instance.',
         AuditEvent::class => 'Audit log of the source instance.',
         NotificationThrottle::class => 'Runtime state of the source instance.',
