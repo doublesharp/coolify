@@ -18,30 +18,68 @@ class OidcDiscoveryService
         $cacheKey = 'oidc:discovery:'.hash('sha256', $issuerUrl);
 
         return Cache::remember($cacheKey, 3600, function () use ($issuerUrl): OidcDiscoveryDocument {
-            $url = $issuerUrl.'/.well-known/openid-configuration';
-
-            try {
-                $response = Http::timeout(15)->acceptJson()->get($url);
-            } catch (Throwable $e) {
-                throw new OidcDiscoveryException("Failed to fetch discovery document: {$e->getMessage()}", previous: $e);
-            }
-
-            if ($response->failed()) {
-                throw new OidcDiscoveryException("Discovery endpoint returned HTTP {$response->status()}");
-            }
-
-            $json = $response->json();
-            if (! is_array($json) || $json === []) {
-                throw new OidcDiscoveryException('Discovery endpoint returned invalid JSON.');
-            }
-
-            $discovery = OidcDiscoveryDocument::fromArray($json);
+            $discovery = OidcDiscoveryDocument::fromArray($this->fetchDiscoveryDocument($issuerUrl));
             if (rtrim($discovery->issuer, '/') !== $issuerUrl) {
                 throw new OidcDiscoveryException('Discovery issuer does not match the configured issuer URL.');
             }
 
             return $discovery;
         });
+    }
+
+    /**
+     * The issuer and signing keys location of a token issuer that only signs tokens, such as a CI system.
+     *
+     * Unlike discover(), it needs no login endpoints: workload issuers like GitHub Actions publish only
+     * the issuer, the JWKS URI and the signing algorithms.
+     */
+    public function issuerMetadata(string $issuerUrl): OidcIssuerMetadata
+    {
+        $this->assertHttpsUrl($issuerUrl, new OidcDiscoveryException('Issuer URL must be an absolute HTTPS URL.'));
+
+        $issuerUrl = rtrim($issuerUrl, '/');
+        $cacheKey = 'oidc:issuer-metadata:'.hash('sha256', $issuerUrl);
+
+        return Cache::remember($cacheKey, 3600, function () use ($issuerUrl): OidcIssuerMetadata {
+            $json = $this->fetchDiscoveryDocument($issuerUrl);
+
+            $issuer = $json['issuer'] ?? null;
+            $jwksUri = $json['jwks_uri'] ?? null;
+            if (! is_string($issuer) || ! is_string($jwksUri) || trim($jwksUri) === '') {
+                throw new OidcDiscoveryException('Discovery document is missing the issuer or jwks_uri.');
+            }
+            if (rtrim($issuer, '/') !== $issuerUrl) {
+                throw new OidcDiscoveryException('Discovery issuer does not match the configured issuer URL.');
+            }
+            $this->assertHttpsUrl($jwksUri, new OidcDiscoveryException('JWKS URI must be an absolute HTTPS URL.'));
+
+            return new OidcIssuerMetadata(issuer: $issuer, jwksUri: $jwksUri);
+        });
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function fetchDiscoveryDocument(string $issuerUrl): array
+    {
+        $url = $issuerUrl.'/.well-known/openid-configuration';
+
+        try {
+            $response = Http::timeout(15)->acceptJson()->get($url);
+        } catch (Throwable $e) {
+            throw new OidcDiscoveryException("Failed to fetch discovery document: {$e->getMessage()}", previous: $e);
+        }
+
+        if ($response->failed()) {
+            throw new OidcDiscoveryException("Discovery endpoint returned HTTP {$response->status()}");
+        }
+
+        $json = $response->json();
+        if (! is_array($json) || $json === []) {
+            throw new OidcDiscoveryException('Discovery endpoint returned invalid JSON.');
+        }
+
+        return $json;
     }
 
     /**
